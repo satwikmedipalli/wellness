@@ -99,7 +99,116 @@ const store = window.api || {
 let DB = null;
 let APP_VERSION = null;
 let saveTimer = null;
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.save(DB), 250); }
+function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.save(DB), 250); Sync.changed(); }
+
+// ---------- sync with the Wellness server (Supabase) ----------
+// Keeps a copy of the last version both sides agreed on ("base") so edits made
+// here and edits Claude made on the server are merged instead of overwritten.
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function mergeById(b = [], l = [], s = []) {
+  const B = new Map(b.map((x) => [x.id, x])), L = new Map(l.map((x) => [x.id, x])), S = new Map(s.map((x) => [x.id, x]));
+  const out = [];
+  const pick = (id) => {
+    const inB = B.has(id), inL = L.has(id), inS = S.has(id);
+    if (inL && inS) return same(L.get(id), B.get(id)) ? S.get(id) : L.get(id);
+    if (inL) return inB && same(L.get(id), B.get(id)) ? null : L.get(id);
+    if (inS) return inB && same(S.get(id), B.get(id)) ? null : S.get(id);
+    return null;
+  };
+  const seen = new Set();
+  for (const x of [...s, ...l]) { if (seen.has(x.id)) continue; seen.add(x.id); const v = pick(x.id); if (v) out.push(v); }
+  return out;
+}
+function mergeMap(b = {}, l = {}, s = {}) {
+  const out = {};
+  for (const k of new Set([...Object.keys(l), ...Object.keys(s)])) {
+    const inL = k in l, inS = k in s, inB = k in b;
+    if (inL && inS) out[k] = same(l[k], b[k]) ? s[k] : l[k];
+    else if (inL) { if (!(inB && same(l[k], b[k]))) out[k] = l[k]; }
+    else if (inS) { if (!(inB && same(s[k], b[k]))) out[k] = s[k]; }
+  }
+  return out;
+}
+function mergeSet(b = [], l = [], s = []) {
+  const out = s.filter((x) => !(b.includes(x) && !l.includes(x)));
+  l.forEach((x) => { if (!b.includes(x) && !out.includes(x)) out.push(x); });
+  return out;
+}
+function merge3(base, local, server) {
+  base = base || {};
+  const out = {};
+  for (const k of new Set([...Object.keys(local), ...Object.keys(server)])) {
+    const b = base[k], l = local[k], s = server[k];
+    if (l === undefined) { out[k] = s; continue; }
+    if (s === undefined) { out[k] = l; continue; }
+    if (Array.isArray(l) && Array.isArray(s)) {
+      const objs = [...l, ...s].every((x) => x && typeof x === 'object' && 'id' in x);
+      out[k] = objs ? mergeById(b, l, s) : mergeSet(b, l, s);
+    } else if (l && s && typeof l === 'object' && typeof s === 'object') out[k] = mergeMap(b, l, s);
+    else out[k] = same(l, b) ? s : l;
+  }
+  return out;
+}
+const Sync = {
+  cfg: (() => { try { return JSON.parse(localStorage.getItem('wellness-sync')); } catch { return null; } })(),
+  state: (() => { try { return JSON.parse(localStorage.getItem('wellness-sync-state')) || { rev: 0, base: null }; } catch { return { rev: 0, base: null }; } })(),
+  pending: false, busy: false, timer: null, last: null, error: null,
+  on() { return !!(this.cfg && this.cfg.url && this.cfg.key); },
+  url(p) { return this.cfg.url.replace(/\/+$/, '') + p; },
+  async req(method, body) {
+    const r = await fetch(this.url('/sync'), { method, headers: { Authorization: 'Bearer ' + this.cfg.key, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 401) throw new Error('The key was rejected');
+    if (r.status !== 200 && r.status !== 409) throw new Error('Server said ' + r.status);
+    return { status: r.status, data: await r.json() };
+  },
+  keep() { localStorage.setItem('wellness-sync-state', JSON.stringify(this.state)); },
+  adopt(doc, rev) { this.state = { rev, base: JSON.parse(JSON.stringify(doc)) }; this.keep(); },
+  changed() { if (!this.on()) return; this.pending = true; clearTimeout(this.timer); this.timer = setTimeout(() => this.push(), 800); },
+  async push() {
+    if (!this.on() || this.busy) return;
+    this.busy = true;
+    try {
+      for (let i = 0; i < 4; i++) {
+        const { status, data } = await this.req('PUT', { baseRev: this.state.rev, doc: DB });
+        if (status === 200) { this.adopt(DB, data.rev); this.pending = false; break; }
+        const merged = Object.assign(defaults(), merge3(this.state.base, DB, data.doc || {}));
+        DB = merged; store.save(DB);
+        this.state = { rev: data.rev, base: data.doc }; this.keep();
+        refreshView();
+      }
+      this.error = null; this.last = new Date();
+    } catch (e) { this.error = e.message; }
+    this.busy = false; showSyncStatus();
+  },
+  async pull() {
+    if (!this.on() || this.busy) return;
+    if (this.pending) return this.push();
+    this.busy = true;
+    try {
+      const { data } = await this.req('GET');
+      if (!data.doc) { this.busy = false; this.pending = true; return this.push(); }
+      if (data.rev !== this.state.rev) {
+        DB = Object.assign(defaults(), this.state.base ? merge3(this.state.base, DB, data.doc) : merge3({}, DB, data.doc));
+        store.save(DB);
+        const changedHere = !same(DB, data.doc);
+        this.adopt(data.doc, data.rev);
+        refreshView();
+        if (changedHere) { this.pending = true; this.busy = false; return this.push(); }
+      }
+      this.error = null; this.last = new Date();
+    } catch (e) { this.error = e.message; }
+    this.busy = false; showSyncStatus();
+  }
+};
+function refreshView() {
+  const active = document.activeElement;
+  if (active && active.matches('input,textarea,select') && active.closest('#main')) { refreshView.later = true; return; }
+  render();
+}
+function showSyncStatus() {
+  const el = $('#syncMsg'); if (!el) return;
+  el.textContent = !Sync.on() ? 'Not connected.' : Sync.error ? 'Problem: ' + Sync.error : Sync.last ? 'Synced ' + Sync.last.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'Connecting…';
+}
 
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
@@ -177,6 +286,7 @@ function render() {
   const st = m.scrollTop;
   m.innerHTML = '<div class="topdrag"></div>' + v();
   m.scrollTop = st;
+  if (ui.view === 'settings') showSyncStatus();
   if (ui.view === 'settings' && window.api) {
     window.api.getOpenAtLogin().then((on) => { const c = $('#loginChk'); if (c) c.checked = on; });
     if (window.api.updateInfo) window.api.updateInfo().then((i) => { const r = $('#updRepo'), v = $('#updVer'); if (r) r.value = i.configured ? i.repo : ''; if (v) v.textContent = 'version ' + i.version; const t = $('#updToken'); if (t && i.hasToken) t.placeholder = 'saved ••••••'; });
@@ -604,6 +714,12 @@ VIEWS.settings = () => {
         <label class="fld" style="flex:1">Access token (private repos only)<input class="inp" id="updToken" type="password" placeholder="leave empty for public"></label></div>
       <div class="row-flex"><button class="btn" data-a="updSave">Save</button><button class="btn primary" data-a="updCheck">Check for updates</button><span class="hint" id="updMsg">Wellness also checks by itself when it opens and every few hours.</span></div>
     </div>` : ''}
+    <div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:10px">
+      <b>Sync &amp; Claude connector</b>
+      <div class="row-flex"><label class="fld" style="flex:2">Server URL<input class="inp" id="syncUrl" placeholder="https://xxxx.supabase.co/functions/v1/wellness" value="${esc(Sync.cfg ? Sync.cfg.url : '')}"></label>
+        <label class="fld" style="flex:1">Key<input class="inp" id="syncKey" type="password" placeholder="${Sync.cfg && Sync.cfg.key ? 'saved ••••••' : 'your Wellness key'}"></label></div>
+      <div class="row-flex"><button class="btn primary" data-a="syncSave">${Sync.on() ? 'Save & sync now' : 'Connect'}</button>${Sync.on() ? '<button class="btn danger" data-a="syncOff">Disconnect</button>' : ''}<span class="hint" id="syncMsg"></span></div>
+    </div>
     <div class="row-flex"><button class="btn" data-a="export">Export my data (JSON)</button><label class="btn" style="cursor:pointer">Import data<input type="file" accept="application/json" data-c="import" class="sr"></label></div>
     <div class="hint">Light and dark follow your Mac’s appearance (System Settings → Appearance).</div>
   </div>`;
@@ -670,6 +786,15 @@ const A = {
   delExp: (el) => { DB.expenses = DB.expenses.filter((x) => x.id !== el.dataset.id); save(); render(); },
   delCard: (el) => { DB.cards.splice(+el.dataset.i, 1); save(); render(); },
   delCat: (el) => { DB.categories.splice(+el.dataset.i, 1); save(); render(); },
+  syncSave: async () => {
+    const url = $('#syncUrl').value.trim(), key = $('#syncKey').value.trim() || (Sync.cfg && Sync.cfg.key) || '';
+    if (!/^https:\/\//.test(url) || !key) { $('#syncMsg').textContent = 'Enter the server URL (https://…) and your key.'; return; }
+    if (!Sync.cfg || Sync.cfg.url !== url) { Sync.state = { rev: 0, base: null }; Sync.keep(); }
+    Sync.cfg = { url, key }; localStorage.setItem('wellness-sync', JSON.stringify(Sync.cfg));
+    $('#syncKey').value = ''; $('#syncMsg').textContent = 'Connecting…';
+    await Sync.pull(); render(); showSyncStatus();
+  },
+  syncOff: () => { if (!confirm('Stop syncing? Your data stays on this Mac.')) return; Sync.cfg = null; localStorage.removeItem('wellness-sync'); render(); },
   updSave: async () => { const i = await window.api.updateSet({ repo: $('#updRepo').value, token: $('#updToken').value }); $('#updToken').value = ''; toast(i.configured ? 'Saved' : 'Repo should look like owner/name'); },
   updCheck: async () => {
     const m = $('#updMsg'); m.textContent = 'Checking…';
@@ -760,6 +885,10 @@ if (window.api && window.api.onUpdateReady) window.api.onUpdateReady((r) => {
   DB = saved ? Object.assign(defaults(), saved) : defaults();
   if (!saved) save();
   render();
+  Sync.pull();
+  setInterval(() => Sync.pull(), 20 * 1000);
+  window.addEventListener('focus', () => Sync.pull());
+  document.addEventListener('focusout', () => setTimeout(() => { if (refreshView.later && !(document.activeElement && document.activeElement.matches('input,textarea,select'))) { refreshView.later = false; render(); } }, 50));
   if (window.api && window.api.updateInfo) { try { APP_VERSION = (await window.api.updateInfo()).version; renderNav(); } catch {} }
   if (window.api) { const on = await window.api.getOpenAtLogin(); const c = $('#loginChk'); if (c) c.checked = on; }
 })();

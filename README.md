@@ -58,6 +58,11 @@ A rare bigger update (to the app's core) asks for `npm run install-app` once.
 - **Spending**: expenses by category for the week and month.
 - **Summary**: this week and this month side by side.
 
+## Sync and the Claude connector
+
+See **CONNECTOR.md** for the one-time Supabase setup that syncs your data
+and lets Claude log food, spending, plans and recaps for you.
+
 ## Your data
 
 Everything is saved in one file:

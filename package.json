@@ -7,7 +7,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
-    "install-app": "electron-builder --mac --dir && rm -rf /Applications/Wellness.app && cp -R dist/mac-arm64/Wellness.app /Applications/ && open /Applications/Wellness.app"
+    "install-app": "electron-builder --mac --dir && rm -rf /Applications/Wellness.app && cp -R dist/mac-arm64/Wellness.app /Applications/ && open /Applications/Wellness.app",
+    "new-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\""
   },
   "devDependencies": {
     "electron": "^33.0.0",
