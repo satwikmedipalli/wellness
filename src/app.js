@@ -232,10 +232,25 @@ VIEWS.today = () => {
   let nowCard = '';
   if (day && isToday) {
     const { now, next } = nowNext(day);
-    if (now || next) {
-      const cur = now ? now.b : next.b;
-      nowCard = `<div class="now">${ic('clock', 20, 2)}<div><div class="k">${now ? 'Now · until ' + fmtTime(now.b.end || (next ? next.b.start : '') ) : 'Next · ' + fmtTime(cur.start)}</div><div class="v">${esc(cur.title)}</div></div>${now && next ? `<div class="n">next<br>${esc(next.b.title)}</div>` : ''}</div>`;
-    } else nowCard = `<div class="now">${ic('clock', 20, 2)}<div><div class="k">Nothing scheduled</div><div class="v">Rest of the day is yours</div></div></div>`;
+    const t = nowMins();
+    const dur = (m) => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), mm = m % 60; return h ? `${h}h${mm ? ' ' + mm + 'm' : ''}` : `${mm}m`; };
+    if (now) {
+      const s = mins(now.b.start), e = now.e;
+      const p = Math.min(100, Math.max(0, ((t - s) / Math.max(1, e - s)) * 100));
+      nowCard = `<div class="now">
+        <div class="now-top"><span class="pulse" aria-hidden="true"></span><span class="now-k">Now</span><span class="now-until">until ${fmtTime(now.b.end || (next ? next.b.start : ''))}</span><span class="now-left mono">${dur(e - t)} left</span></div>
+        <div class="now-title">${esc(now.b.title)}</div>
+        <div class="now-bar" role="img" aria-label="${Math.round(p)}% of this block done"><i style="width:${p.toFixed(1)}%"></i></div>
+        ${next ? `<div class="now-next">Next · <span class="mono">${fmtTime(next.b.start)}</span> ${esc(next.b.title)}</div>` : ''}
+      </div>`;
+    } else if (next) {
+      nowCard = `<div class="now">
+        <div class="now-top"><span class="now-k">Up next</span><span class="now-until">at ${fmtTime(next.b.start)}</span><span class="now-left mono">in ${dur(mins(next.b.start) - t)}</span></div>
+        <div class="now-title">${esc(next.b.title)}</div>
+      </div>`;
+    } else {
+      nowCard = `<div class="now"><div class="now-top"><span class="now-k">Done for today</span></div><div class="now-title">Nothing else scheduled</div></div>`;
+    }
   }
   const head = `<div class="head">
     <div class="head-title">
