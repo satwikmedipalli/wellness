@@ -540,13 +540,19 @@ export function makeHandler({ env, fetchImpl = fetch }) {
     const rest = at >= 0 ? parts.slice(at + 1) : parts;
     const route = rest[0] || '';
     if (route === '' || route === 'health') return json({ ok: true, service: 'wellness' });
+    // No OAuth here: answer sign-in discovery probes with a plain 404 so Claude
+    // doesn't try to register with a sign-in service that doesn't exist.
+    if (route.startsWith('.well-known') || parts.includes('.well-known') || ['register', 'authorize', 'token'].includes(route)) return json({ error: 'Not found' }, 404);
     if (!env.WELLNESS_KEY || env.WELLNESS_KEY.length < 24) return json({ error: 'Server key not set. Run: supabase secrets set WELLNESS_KEY=…' }, 500);
 
     const auth = req.headers.get('authorization') || '';
     const headerKey = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : (req.headers.get('x-api-key') || '').trim();
     const pathKey = route === 'mcp' && rest[1] ? decodeURIComponent(rest[1]) : '';
     if (!safeEqual(headerKey, env.WELLNESS_KEY) && !safeEqual(pathKey, env.WELLNESS_KEY)) {
-      return json({ error: 'Unauthorized' }, 401, { 'WWW-Authenticate': 'Bearer realm="wellness"' });
+      // A wrong key in the URL looks like a missing page; no auth challenge,
+      // so clients don't start an OAuth flow.
+      if (pathKey) return json({ error: 'Not found' }, 404);
+      return json({ error: 'Unauthorized' }, 401);
     }
     try {
       if (route === 'mcp') return await handleMcp(req);
