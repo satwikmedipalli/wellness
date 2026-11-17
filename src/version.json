@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "minShell": 2,
+  "files": [
+    "index.html",
+    "styles.css",
+    "app.js",
+    "version.json"
+  ]
+}

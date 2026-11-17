@@ -1,0 +1,38 @@
+{
+  "name": "wellness",
+  "productName": "Wellness",
+  "version": "0.2.0",
+  "description": "Personal routine, health and spending tracker",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "install-app": "electron-builder --mac --dir && rm -rf /Applications/Wellness.app && cp -R dist/mac-arm64/Wellness.app /Applications/ && open /Applications/Wellness.app"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.satwik.wellness",
+    "productName": "Wellness",
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "target": [
+        "dir"
+      ]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "updater.js",
+      "package.json",
+      "src/**/*"
+    ]
+  },
+  "wellness": {
+    "repo": "satwikmedipalli/Wellness",
+    "branch": "main",
+    "shell": 2
+  }
+}
