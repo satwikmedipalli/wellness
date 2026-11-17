@@ -196,3 +196,11 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .circuit .hist .chip{min-height:26px;font-size:12px}
 .icon-btn.sm{width:24px;height:24px;font-size:12px}
 .icon-btn:disabled,.btn:disabled{opacity:.4;cursor:default}
+
+/* training day picker + rest card */
+.seg.daytype{align-self:flex-start;flex-wrap:wrap;border-radius:9px}
+.seg.daytype button{height:32px;padding:0 14px;font-size:12.5px}
+.restcard{background:var(--card);border:1px solid var(--line2);border-radius:12px;padding:22px 20px;display:flex;flex-direction:column;gap:4px}
+.restcard .ttl{font-family:var(--serif);font-size:22px;font-weight:600}
+.seg.daytype button.on{background:var(--acc);color:var(--onAcc)}
+.circuit .hist .chip.on{background:var(--soft2);color:var(--deep);border-color:var(--soft2)}

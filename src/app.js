@@ -86,6 +86,7 @@ function defaults() {
     burns: {},
     exercises: [],
     sessions: [],
+    training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: []
@@ -590,21 +591,21 @@ function abCircuit(k) {
   if (!moves.length) return `<div class="empty-state" style="padding:22px"><p>Add your ab moves below with split day “Abs (circuit)”. They’ll show here as one circuit: moves down the side, rounds across.</p></div>`;
   const dates = abDates();
   const E = ui.ab;
-  const shownDate = E ? E.date : dates.find((d) => d <= k) || null;
-  const c = shownDate ? circuitOn(shownDate) : null;
-  const isDay = shownDate === k;
-  const rounds = E ? E.rounds : c ? c.rounds : 0;
+  const c = circuitOn(k);
+  const logged = c.rounds > 0;
   const prev = dates.find((d) => d < k);
-  const nextRounds = (isDay ? c.rounds : prev ? circuitOn(prev).rounds : 0) || null;
-  const label = !shownDate ? 'Not logged yet' : isDay ? (k === todayKey() ? 'Today' : shortDay(k)) : `Last time · ${shortDay(shownDate)}`;
-  const cols = Math.max(rounds, 1);
+  const prevRounds = prev ? circuitOn(prev).rounds : 0;
+  const rounds = E ? E.rounds : c.rounds;
+  const nextRounds = (logged ? c.rounds : prevRounds) || null;
+  const dayLabel = k === todayKey() ? 'Today' : shortDay(k);
+  const cols = Math.max(rounds || prevRounds, 1);
   const head = `<div class="cbar">
       <span class="ttl">Ab circuit</span>
-      <span class="pill">${esc(E ? (k === todayKey() ? 'Today' : shortDay(k)) : label)}</span>
-      ${rounds ? `<span class="pill mono">${rounds} round${rounds === 1 ? '' : 's'}</span>` : ''}
-      ${!E && c && c.note ? `<span class="pill">${esc(c.note)}</span>` : ''}
+      <span class="pill">${esc(dayLabel)}</span>
+      ${rounds ? `<span class="pill mono">${rounds} round${rounds === 1 ? '' : 's'}</span>` : E ? '' : '<span class="pill faint">Not logged</span>'}
+      ${!E && c.note ? `<span class="pill">${esc(c.note)}</span>` : ''}
       <span class="next">${nextRounds ? `Next time <b>${nextRounds + 1}</b> rounds, once all ${nextRounds} feel solid` : 'Progress by adding a round'}</span>
-      ${E ? '' : `<button class="btn ${isDay ? '' : 'primary'} sm" data-a="abEdit">${isDay ? 'Edit' : `Log ${k === todayKey() ? 'today' : shortDay(k)}`}</button>`}
+      ${E ? '' : `<button class="btn ${logged ? '' : 'primary'} sm" data-a="abEdit">${logged ? 'Edit' : 'Log circuit'}</button>`}
     </div>`;
   const colgroup = `<colgroup><col style="width:40px"><col style="width:${E ? 250 : 210}px">${Array.from({ length: cols }, () => '<col>').join('')}<col style="width:110px"></colgroup>`;
   const thead = `<tr><th class="g">#</th><th>Move</th>${Array.from({ length: cols }, (_, i) => `<th class="rd">R${i + 1}</th>`).join('')}<th class="r">Total</th></tr>`;
@@ -621,7 +622,7 @@ function abCircuit(k) {
         ${vals.map((v, ri) => `<td class="rd"><input class="inp num cell" value="${esc(v)}" data-i="abCell" data-id="${ex.id}" data-r="${ri}" inputmode="numeric" aria-label="${esc(ex.name)} round ${ri + 1}"></td>`).join('')}
         <td class="tot" id="abTot-${ex.id}">${abTotal(sets, unit)}</td></tr>`;
     }).join('');
-  } else if (c && c.rounds) {
+  } else if (logged) {
     body = c.rows.map((r, mi) => {
       const sets = r.s ? r.s.sets : [];
       return `<tr><td class="g">${mi + 1}</td><td><span style="font-weight:600">${esc(r.ex.name)}</span><span class="unit">${UNIT[r.unit]}</span></td>
@@ -629,14 +630,71 @@ function abCircuit(k) {
         <td class="tot">${abTotal(sets, r.unit)}</td></tr>`;
     }).join('');
   } else {
-    body = moves.map((ex, mi) => `<tr><td class="g">${mi + 1}</td><td><span style="font-weight:600">${esc(ex.name)}</span><span class="unit">${UNIT[abUnit(ex)]}</span></td><td class="rd faint">—</td><td class="tot faint">—</td></tr>`).join('');
+    body = moves.map((ex, mi) => `<tr><td class="g">${mi + 1}</td><td><span style="font-weight:600">${esc(ex.name)}</span><span class="unit">${UNIT[abUnit(ex)]}</span></td>${Array.from({ length: cols }, () => '<td class="rd faint">—</td>').join('')}<td class="tot faint">—</td></tr>`).join('');
   }
   const foot = E
     ? `<div class="addbar"><button class="btn sm" data-a="abRound" data-d="1">${ic('plus', 12, 2.2)} Round</button><button class="btn ghost sm" data-a="abRound" data-d="-1" ${E.rounds > 1 ? '' : 'disabled'}>− Round</button>
         <label class="fld" style="flex:1;min-width:220px">Note<input class="inp" value="${esc(E.note)}" data-i="abNote" placeholder="e.g. 5 min rest between rounds"></label>
         <button class="btn ghost" data-a="abCancel">Cancel</button><button class="btn primary" data-a="abSave">Save circuit</button></div>`
-    : dates.length ? `<div class="hist"><span class="small muted">Recent</span>${dates.slice(0, 8).map((d) => `<button class="chip ${d === shownDate ? 'on' : ''}" data-a="hGo" data-k="${d}">${shortDay(d)} · <span class="mono">${circuitOn(d).rounds}</span></button>`).join('')}</div>` : '';
+    : dates.length ? `<div class="hist"><span class="small muted">Recent</span>${dates.slice(0, 8).map((d) => `<button class="chip ${d === k ? 'on' : ''}" data-a="hGo" data-k="${d}">${shortDay(d)} · <span class="mono">${circuitOn(d).rounds}</span></button>`).join('')}</div>` : '';
   return `<div class="sheet circuit">${head}<table>${colgroup}${thead}${body}</table>${foot}</div>`;
+}
+
+// What kind of day it is for training: one of the split days, Abs or Rest. Set by the person;
+// until then it is read off what was logged that day.
+const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs', 'Rest'];
+function trainingOn(k) {
+  if (DB.training && DB.training[k]) return { type: DB.training[k], set: true };
+  const ses = DB.sessions.filter((s) => s.date === k).map((s) => DB.exercises.find((e) => e.id === s.exId)).filter(Boolean);
+  if (ses.some(isBodyweight)) return { type: 'Abs', set: false };
+  const lift = ses.find((e) => !isBodyweight(e));
+  return { type: lift ? lift.group : '', set: false };
+}
+function liftsTable(k, group) {
+  const weighted = DB.exercises.filter((ex) => !isBodyweight(ex));
+  const loggedIds = new Set(DB.sessions.filter((s) => s.date === k).map((s) => s.exId));
+  const show = weighted.filter((ex) => !group || ex.group === group || loggedIds.has(ex.id));
+  const groups = [...SPLIT.filter((g) => g !== 'Abs'), ...new Set(show.map((ex) => ex.group).filter((g) => !SPLIT.includes(g)))];
+  const rows = groups.map((g) => {
+    const list = show.filter((ex) => ex.group === g);
+    if (!list.length) return '';
+    return `<tr class="sec"><td class="g"></td><td colspan="4">${esc(g)}</td></tr>` + list.map((ex) => {
+      const tw = targetWeights(ex, k);
+      const last = lastSession(ex, k);
+      const day = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
+      let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
+        <td class="mono">${day ? day.sets.map((x) => setText(x, false)).join(' / ') : '<span class="faint">—</span>'}</td>
+        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span></td>
+        <td class="c"><button class="btn sm ${day ? '' : 'primary'}" data-a="logEx" data-id="${ex.id}">${day ? 'Edit' : 'Log'}</button></td></tr>`;
+      if (ui.logEx === ex.id) {
+        if (!ui.logSets) ui.logSets = day ? day.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
+        const cells = ui.logSets.map((x, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(x.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
+        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex">${cells}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
+      }
+      return row;
+    }).join('');
+  }).join('');
+  const empty = group ? `No ${esc(group)} lifts yet. Add them below.` : 'Add the lifts from your split below.';
+  return `<div class="sheet"><table><colgroup><col style="width:40px"><col style="width:200px"><col><col style="width:290px"><col style="width:80px"></colgroup>
+    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td></td></tr>
+    <tr><th class="g">#</th><th>Lift</th><th>${k === todayKey() ? 'Today' : shortDay(k)} (lb × reps)</th><th>Target this week (lb)</th><th></th></tr>
+    ${rows || `<tr><td class="g">1</td><td colspan="4" class="faint">${empty}</td></tr>`}
+  </table>
+  <div class="addbar"><input class="inp" id="exName" placeholder="Exercise, e.g. Lat pulldown" style="flex:1;min-width:180px" aria-label="Exercise name">
+    <select class="sel" id="exGroup" aria-label="Split day" data-c="exGroup">${SPLIT.filter((g) => g !== 'Abs').map((g) => `<option ${g === group ? 'selected' : ''}>${esc(g)}</option>`).join('')}<option value="Abs">Abs (circuit)</option></select>
+    <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
+    <button class="btn" data-a="addEx">Add exercise</button></div></div>`;
+}
+function workoutsSection(k) {
+  const tr = trainingOn(k);
+  const seg = `<div class="seg daytype" role="group" aria-label="Training for ${shortDay(k)}">${DAY_TYPES.map((t) => `<button class="${tr.type === t ? 'on' : ''}" data-a="setTrain" data-t="${esc(t)}" aria-pressed="${tr.type === t}">${t === 'Abs' ? 'Ab day' : t === 'Rest' ? 'Rest day' : esc(t)}</button>`).join('')}</div>`;
+  let body;
+  if (tr.type === 'Rest') body = `<div class="restcard"><span class="ttl">Rest day</span><span class="muted">Nothing to log. Recovery is part of the plan.</span></div>`;
+  else if (tr.type === 'Abs') body = abCircuit(k);
+  else if (tr.type) body = liftsTable(k, tr.type);
+  else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
+  return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week. Ab circuit: add a round when every round feels solid.</span></div>
+  ${seg}${body}</div>`;
 }
 
 VIEWS.health = () => {
@@ -654,27 +712,6 @@ VIEWS.health = () => {
     return `<tr class="sec"><td class="g"></td><td colspan="8">${m}</td></tr>` + items.map((x) => `<tr><td class="g"></td><td>${esc(x.name)}${x.note ? ` <span class="faint small">· ${esc(x.note)}</span>` : ''}</td><td class="mono small muted">${esc(x.qty)}</td><td class="mono r">${Math.round(x.cal)}</td><td class="mono r">${r1(x.p)}</td><td class="mono r">${r1(x.c)}</td><td class="mono r">${r1(x.fib)}</td><td class="mono r">${r1(x.f)}</td><td class="c"><button class="icon-btn" data-a="delFood" data-id="${x.id}" aria-label="Remove ${esc(x.name)}">${ic('x', 13)}</button></td></tr>`).join('');
   }).join('');
   const lib = DB.foodLibrary.map((f) => `<option value="${esc(f.name)}">${esc(f.serving)} · ${f.cal} cal</option>`).join('');
-  const weighted = DB.exercises.filter((ex) => !isBodyweight(ex));
-  const groups = [...SPLIT.filter((g) => g !== 'Abs'), ...new Set(weighted.map((ex) => ex.group).filter((g) => !SPLIT.includes(g)))];
-  const exRows = groups.map((g) => {
-    const list = weighted.filter((ex) => ex.group === g);
-    if (!list.length) return '';
-    return `<tr class="sec"><td class="g"></td><td colspan="4">${esc(g)}</td></tr>` + list.map((ex) => {
-      const tw = targetWeights(ex, k);
-      const last = lastSession(ex);
-      const today = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
-      let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
-        <td class="mono small">${last ? `<span class="muted">${shortDay(last.date)}</span> · ${last.sets.map((x) => setText(x, false)).join(' / ')}` : '<span class="faint">—</span>'}</td>
-        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${esc(tw.why)}</span></td>
-        <td class="c"><button class="btn sm" data-a="logEx" data-id="${ex.id}">${today ? 'Edit' : 'Log'}</button></td></tr>`;
-      if (ui.logEx === ex.id) {
-        if (!ui.logSets) ui.logSets = today ? today.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
-        const cells = ui.logSets.map((x, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(x.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
-        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex">${cells}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
-      }
-      return row;
-    }).join('');
-  }).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Health</span><div class="row-flex" style="align-items:baseline;gap:14px"><h1 class="h1">${DOW[parseKey(k).getDay()]}</h1><span class="h1sub">${longDate(k)}</span></div></div>${dateNav('hNav', k === todayKey() ? 'Today' : 'Go to today')}</div>
   <div class="stats">
     <div class="stat"><span class="k">Eaten</span><span class="v">${Math.round(t.cal)}</span></div>
@@ -708,17 +745,7 @@ VIEWS.health = () => {
     ${DB.foodLibrary.map((f) => `<tr><td>${esc(f.name)}${f.note ? ` <span class="faint small">· ${esc(f.note)}</span>` : ''}</td><td class="small muted">${esc(f.serving)}</td><td class="mono r">${f.cal}</td><td class="mono r">${f.p}</td><td class="mono r">${f.c}</td><td class="mono r">${f.fib}</td><td class="mono r">${f.f}</td><td class="c"><button class="icon-btn" data-a="delLib" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">${ic('x', 13)}</button></td></tr>`).join('')}
     </table><div class="addbar"><input class="inp" id="lName" placeholder="Food" style="flex:1;min-width:160px" aria-label="Food name"><input class="inp" id="lSrv" placeholder="Serving" style="width:110px" aria-label="Serving"><input class="inp num" id="lCal" placeholder="Cal" aria-label="Calories"><input class="inp num" id="lP" placeholder="P" aria-label="Protein"><input class="inp num" id="lC" placeholder="C" aria-label="Carbs"><input class="inp num" id="lFib" placeholder="Fib" aria-label="Fiber"><input class="inp num" id="lF" placeholder="F" aria-label="Fat"><button class="btn" data-a="addLib">Add to library</button></div></div></div></details>
 
-  <div class="section"><div class="section-head"><h2 class="h2">Workouts</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week, once per week. Ab circuit: add a round when every round feels solid.</span></div>
-  ${abCircuit(k)}
-  <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:200px"><col><col style="width:250px"><col style="width:80px"></colgroup>
-    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td></td></tr>
-    <tr><th class="g">#</th><th>Lift</th><th>Last session</th><th>This week (lb)</th><th></th></tr>
-    ${exRows || '<tr><td class="g">1</td><td colspan="4" class="faint">Add the lifts from your split (Shoulders & Chest, Arms, Back, Legs) below.</td></tr>'}
-  </table>
-  <div class="addbar"><input class="inp" id="exName" placeholder="Exercise, e.g. Lat pulldown" style="flex:1;min-width:180px" aria-label="Exercise name">
-    <select class="sel" id="exGroup" aria-label="Split day" data-c="exGroup"><option>Shoulders & Chest</option><option>Arms</option><option>Back</option><option>Legs</option><option value="Abs">Abs (circuit)</option></select>
-    <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
-    <button class="btn" data-a="addEx">Add exercise</button></div></div></div>`;
+  ${workoutsSection(k)}`;
 };
 
 // ---------- spending ----------
@@ -895,6 +922,12 @@ const A = {
     save(); render();
   },
   logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; render(); },
+  setTrain: (el) => {
+    const k = ui.hDate, t = el.dataset.t;
+    DB.training = DB.training || {};
+    if (DB.training[k] === t) delete DB.training[k]; else DB.training[k] = t;
+    ui.ab = null; ui.logEx = null; ui.logSets = null; save(); render();
+  },
   hGo: (el) => { ui.hDate = el.dataset.k; ui.ab = null; ui.logEx = null; render(); },
   abEdit: () => {
     const k = ui.hDate, dates = abDates();
@@ -942,6 +975,7 @@ const A = {
       DB.sessions.push(ses);
       logged++;
     });
+    if (logged && DB.training && !DB.training[E.date]) DB.training[E.date] = 'Abs';
     ui.ab = null; save(); render(); toast(logged ? 'Circuit saved' : 'Circuit cleared');
   },
   saveEx: (el) => {
