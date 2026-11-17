@@ -65,7 +65,7 @@ export function emptyDoc() {
     version: 1,
     settings: { proteinTarget: 70, fiberTarget: 20, currency: '$' },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
-    plans: [], days: {}, foodLibrary: [], foods: [], burns: {}, exercises: [], sessions: [],
+    plans: [], days: {}, foodLibrary: [], foods: [], burns: {}, exercises: [], sessions: [], training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: []
@@ -117,6 +117,15 @@ function targetWeights(doc, ex, k) {
   return { weights: w, reason: 'same as last week' };
 }
 
+// What kind of training day it is: a split day, Abs or Rest. Set explicitly, or read off what was logged.
+const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs', 'Rest'];
+function trainingOn(doc, k) {
+  if (doc.training && doc.training[k]) return doc.training[k];
+  const ex = doc.sessions.filter((s) => s.date === k).map((s) => doc.exercises.find((e) => e.id === s.exId)).filter(Boolean);
+  if (ex.some(isBodyweight)) return 'Abs';
+  const lift = ex.find((e) => !isBodyweight(e));
+  return lift ? lift.group : null;
+}
 function describeDay(doc, k) {
   const day = doc.days[k];
   const t = foodTotals(doc, k);
@@ -139,6 +148,7 @@ function describeDay(doc, k) {
     entries: doc.foods.filter((x) => x.date === k).map((x) => ({ id: x.id, meal: x.meal, name: x.name, qty: x.qty, calories: x.cal, protein: x.p, carbs: x.c, fiber: x.fib, fat: x.f, ...(x.note ? { note: x.note } : {}) }))
   };
   if (burn != null) { out.food.burned = burn; out.food.deficit = Math.round(burn - t.calories); }
+  out.training = trainingOn(doc, k);
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
   const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
@@ -159,12 +169,14 @@ function summarize(doc, from, to, tz) {
   const avg = (f) => (foodDays.length ? r1(foodDays.reduce((a, x) => a + f(x.t), 0) / foodDays.length) : null);
   let def = 0, defDays = 0;
   foodDays.forEach((x) => { if (doc.burns[x.k] != null) { def += doc.burns[x.k] - x.t.calories; defDays++; } });
+  const trainingDays = {};
+  for (let k = from; k <= to; k = addDays(k, 1)) { const t = trainingOn(doc, k); if (t) trainingDays[t] = (trainingDays[t] || 0) + 1; }
   const ex = doc.expenses.filter((e) => e.date >= from && e.date <= to);
   const byCat = {}, byCard = {};
   ex.forEach((e) => { byCat[e.category] = r1((byCat[e.category] || 0) + e.amount); const c = e.card || 'Cash / other'; byCard[c] = r1((byCard[c] || 0) + e.amount); });
   return {
     from, to,
-    routine: { daysPlanned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null, blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks, workoutSessions: doc.sessions.filter((s) => s.date >= from && s.date <= to).length },
+    routine: { daysPlanned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null, blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks, workoutSessions: doc.sessions.filter((s) => s.date >= from && s.date <= to).length, trainingDays },
     health: { daysWithFood: foodDays.length, avgCalories: avg((t) => t.calories), avgProtein: avg((t) => t.protein), avgFiber: avg((t) => t.fiber), daysProteinGoalMet: foodDays.filter((x) => x.t.protein >= doc.settings.proteinTarget).length, totalDeficit: defDays ? Math.round(def) : null, daysWithBurnLogged: defDays },
     spending: { total: r1(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard }
   };
@@ -281,6 +293,11 @@ const TOOLS = [
       },
       required: ['exercise', 'sets']
     }
+  },
+  {
+    name: 'set_training_day',
+    description: 'Say what kind of training day a date is: one of the split days (Shoulders & Chest, Arms, Back, Legs), Abs, or Rest. Shown in the Health view’s day picker. day=null clears it.',
+    inputSchema: { type: 'object', properties: { date: dateProp, day: { type: ['string', 'null'], enum: [...DAY_TYPES, null] } }, required: ['day'] }
   },
   {
     name: 'remove_entries',
@@ -447,6 +464,15 @@ function runTool(name, args, doc, tz) {
       doc.sessions.push(session);
       const next = body ? { rounds: sets.length, reason: `${sets.length} rounds today. Add a round once every round is done with good form` } : targetWeights(doc, ex, addDays(weekStart(k), 7));
       return { write: true, result: { exercise: ex.name, kind: body ? 'bodyweight' : 'weights', date: k, sets: sets.map((s) => setText(s, body)), ...(session.note ? { note: session.note } : {}), [body ? 'next' : 'nextWeek']: next } };
+    }
+    case 'set_training_day': {
+      const k = resolveDate(a.date, tz);
+      doc.training = doc.training || {};
+      if (a.day == null || a.day === '') { delete doc.training[k]; return { write: true, result: { date: k, training: trainingOn(doc, k), cleared: true } }; }
+      const day = DAY_TYPES.find((t) => norm(t) === norm(a.day)) || DAY_TYPES.find((t) => norm(t).includes(norm(a.day)) || norm(a.day).includes(norm(t)));
+      if (!day) throw new Error(`Day must be one of: ${DAY_TYPES.join(', ')}.`);
+      doc.training[k] = day;
+      return { write: true, result: { date: k, training: day } };
     }
     case 'remove_entries': {
       const fi = new Set(a.food_ids || []), ei = new Set(a.expense_ids || []);

@@ -81,7 +81,8 @@ Then, for authentication:
 | set_calories_burned | Calories burned for the deficit |
 | plan_day | Put a saved plan on a day, with one-day changes |
 | update_day | Tick blocks, pick free-time choices, add notes |
-| log_workout | Log sets; returns next week's weights by your +10 lb rule |
+| log_workout | Log sets (weights, or reps / seconds / per side for the ab circuit); returns the next target |
+| set_training_day | Mark a date as a split day, Ab day or Rest day |
 | remove_entries | Delete food or expense entries |
 
 ## Updating the server later
