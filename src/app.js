@@ -213,7 +213,7 @@ function showSyncStatus() {
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
   week: weekStart(todayKey()), month: monthKey(todayKey()), hDate: todayKey(), sMonth: monthKey(todayKey()),
-  logEx: null, lastCard: undefined
+  logEx: null, logSets: null, lastCard: undefined
 };
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
@@ -535,7 +535,22 @@ function foodTotals(k) {
   DB.foods.filter((x) => x.date === k).forEach((x) => { t.cal += x.cal; t.p += x.p; t.c += x.c; t.fib += x.fib; t.f += x.f; t.n++; });
   return t;
 }
+// A set is { w: lb (0 = bodyweight), r: reps, t?: seconds held, side?: reps per side }.
+// Bodyweight / timed exercises (all of Abs by default) progress by adding rounds, not +10 lb.
+const isBodyweight = (ex) => !!ex && (ex.kind === 'bodyweight' || (!ex.kind && ex.group === 'Abs'));
+function setText(s, body) {
+  const amount = s.t ? `${s.t} s` : s.r === '' || s.r == null ? '—' : `${s.r}${s.side ? '/side' : ''}`;
+  if (!body) return `${s.w}×${amount}`;
+  return s.w ? `+${s.w} lb · ${amount}` : amount;
+}
+function lastSession(ex, before) {
+  return DB.sessions.filter((s) => s.exId === ex.id && (!before || s.date < before)).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+}
 function targetWeights(ex, k) {
+  if (isBodyweight(ex)) {
+    const prev = lastSession(ex, k);
+    return prev ? { w: [], rounds: prev.sets.length, why: `${prev.sets.length} rounds last time · add one when every round feels solid` } : { w: [], rounds: null, why: 'progress by adding rounds' };
+  }
   const ws = weekStart(k);
   const prev = DB.sessions.filter((s) => s.exId === ex.id && s.date < ws).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
   if (!prev) return { w: ex.start.slice(), why: 'starting weights' };
@@ -559,16 +574,29 @@ VIEWS.health = () => {
   }).join('');
   const lib = DB.foodLibrary.map((f) => `<option value="${esc(f.name)}">${esc(f.serving)} · ${f.cal} cal</option>`).join('');
   const exRows = DB.exercises.map((ex) => {
+    const body = isBodyweight(ex);
     const tw = targetWeights(ex, k);
-    const last = DB.sessions.filter((s) => s.exId === ex.id).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+    const last = lastSession(ex);
     const today = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
-    let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td><td class="small muted">${esc(ex.group)}</td>
-      <td class="mono small">${last ? `${shortDay(last.date)} · ${last.sets.map((s) => `${s.w}×${s.r || '—'}`).join(' / ')}` : '<span class="faint">—</span>'}</td>
-      <td class="mono" style="font-weight:600">${tw.w.join(' / ')} <span class="faint small" style="font-family:var(--sans);font-weight:400">· ${esc(tw.why)}</span></td>
+    const target = body ? (tw.rounds ? `${tw.rounds} rounds` : '—') : tw.w.join(' / ');
+    let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td><td class="small muted">${esc(ex.group)}${body ? ' · bodyweight' : ''}</td>
+      <td class="mono small">${last ? `${shortDay(last.date)} · ${last.sets.map((s) => setText(s, body)).join(' / ')}${body ? ` <span class="faint">(${last.sets.length} rounds)</span>` : ''}${last.note ? ` <span class="faint" style="font-family:var(--sans)">· ${esc(last.note)}</span>` : ''}` : '<span class="faint">—</span>'}</td>
+      <td class="mono" style="font-weight:600">${target} <span class="faint small" style="font-family:var(--sans);font-weight:400">· ${esc(tw.why)}</span></td>
       <td class="c"><button class="btn sm" data-a="logEx" data-id="${ex.id}">${today ? 'Edit' : 'Log'}</button></td></tr>`;
     if (ui.logEx === ex.id) {
-      const sets = today ? today.sets : tw.w.map((w) => ({ w, r: '' }));
-      row += `<tr class="chiprow"><td class="g"></td><td colspan="5"><div class="row-flex">${sets.map((s, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(s.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(s.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('')}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
+      if (!ui.logSets) {
+        const tpl = last && last.sets[0] ? last.sets[0] : { w: 0, r: '' };
+        ui.logSets = today ? today.sets.map((s) => ({ ...s }))
+          : body ? Array.from({ length: tw.rounds || 1 }, () => ({ w: tpl.w || 0, r: tpl.t ? '' : tpl.r, ...(tpl.t ? { t: tpl.t } : {}), ...(tpl.side ? { side: true } : {}) }))
+          : tw.w.map((w) => ({ w, r: '' }));
+      }
+      const sets = ui.logSets;
+      const timed = body && sets.some((s) => s.t);
+      const cells = sets.map((s, i) => body
+        ? `<span class="small muted">Round ${i + 1}</span>${timed ? `<input class="inp num" id="t${i}" value="${esc(s.t || '')}" placeholder="sec" aria-label="Round ${i + 1} seconds"><span class="faint">s</span>` : `<input class="inp num" id="r${i}" value="${esc(s.r)}" placeholder="reps" aria-label="Round ${i + 1} reps"><span class="faint">${s.side ? '/side' : 'reps'}</span>`}`
+        : `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(s.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(s.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
+      const roundBtns = body ? `<button class="btn sm" data-a="exRound" data-d="1" aria-label="Add a round">${ic('plus', 12, 2.2)} Round</button>${sets.length > 1 ? '<button class="btn ghost sm" data-a="exRound" data-d="-1">− Round</button>' : ''}` : '';
+      row += `<tr class="chiprow"><td class="g"></td><td colspan="5"><div class="row-flex">${cells}${roundBtns}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
     }
     return row;
   }).join('');
@@ -605,7 +633,7 @@ VIEWS.health = () => {
     ${DB.foodLibrary.map((f) => `<tr><td>${esc(f.name)}${f.note ? ` <span class="faint small">· ${esc(f.note)}</span>` : ''}</td><td class="small muted">${esc(f.serving)}</td><td class="mono r">${f.cal}</td><td class="mono r">${f.p}</td><td class="mono r">${f.c}</td><td class="mono r">${f.fib}</td><td class="mono r">${f.f}</td><td class="c"><button class="icon-btn" data-a="delLib" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">${ic('x', 13)}</button></td></tr>`).join('')}
     </table><div class="addbar"><input class="inp" id="lName" placeholder="Food" style="flex:1;min-width:160px" aria-label="Food name"><input class="inp" id="lSrv" placeholder="Serving" style="width:110px" aria-label="Serving"><input class="inp num" id="lCal" placeholder="Cal" aria-label="Calories"><input class="inp num" id="lP" placeholder="P" aria-label="Protein"><input class="inp num" id="lC" placeholder="C" aria-label="Carbs"><input class="inp num" id="lFib" placeholder="Fib" aria-label="Fiber"><input class="inp num" id="lF" placeholder="F" aria-label="Fat"><button class="btn" data-a="addLib">Add to library</button></div></div></div></details>
 
-  <div class="section"><div class="section-head"><h2 class="h2">Workouts</h2><span class="hint">Rule: 15 reps on set 1 moves every set up 10 lb next week — once per week.</span></div>
+  <div class="section"><div class="section-head"><h2 class="h2">Workouts</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week — once per week. Abs and bodyweight moves: add a round.</span></div>
   <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:180px"><col style="width:130px"><col><col><col style="width:80px"></colgroup>
     <tr><th class="g">#</th><th>Exercise</th><th>Day</th><th>Last session</th><th>This week’s weights</th><th></th></tr>
     ${exRows || '<tr><td class="g">1</td><td colspan="5" class="faint">Add the exercises from your split (Shoulders & Chest, Arms, Back, Legs).</td></tr>'}
@@ -726,12 +754,21 @@ VIEWS.settings = () => {
 };
 
 // ---------- actions ----------
+function readLogSets(sets) {
+  const val = (id) => { const el = $('#' + id); return el ? el.value.trim() : null; };
+  sets.forEach((s, i) => {
+    const w = val('w' + i), r = val('r' + i), t = val('t' + i);
+    if (w !== null) s.w = num(w);
+    if (r !== null) s.r = r === '' ? '' : num(r);
+    if (t !== null) { if (t === '' || !num(t)) delete s.t; else s.t = num(t); }
+  });
+}
 const A = {
   go: (el) => go(el.dataset.v),
   dayNav: (el) => { const d = +el.dataset.d; ui.date = d === 0 ? todayKey() : addDays(ui.date, d); ui.open = null; ui.editDay = false; render(); },
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
-  hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; render(); },
+  hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; render(); },
   sNav: (el) => { const d = +el.dataset.d; ui.sMonth = d === 0 ? monthKey(todayKey()) : addMonths(ui.sMonth, d); render(); },
   openDay: (el) => { ui.date = el.dataset.k; ui.view = 'today'; ui.open = null; ui.editDay = false; render(); },
   tick: (el) => { const d = DB.days[ui.date]; d.done[el.dataset.b] = !d.done[el.dataset.b]; save(); render(); },
@@ -774,13 +811,26 @@ const A = {
   delFood: (el) => { DB.foods = DB.foods.filter((x) => x.id !== el.dataset.id); save(); render(); },
   addLib: () => { const n = $('#lName').value.trim(); if (!n) return; DB.foodLibrary.push({ id: uid(), name: n, serving: $('#lSrv').value.trim() || '1 serving', cal: num($('#lCal').value), p: num($('#lP').value), c: num($('#lC').value), fib: num($('#lFib').value), f: num($('#lF').value), note: '' }); save(); render(); },
   delLib: (el) => { DB.foodLibrary = DB.foodLibrary.filter((x) => x.id !== el.dataset.id); save(); render(); },
-  addEx: () => { const n = $('#exName').value.trim(); if (!n) return; DB.exercises.push({ id: uid(), name: n, group: $('#exGroup').value, start: [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)] }); save(); render(); },
-  logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; render(); },
+  addEx: () => {
+    const n = $('#exName').value.trim(); if (!n) return;
+    const group = $('#exGroup').value, body = group === 'Abs';
+    DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)] });
+    save(); render();
+  },
+  logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; render(); },
+  exRound: (el) => {
+    const sets = ui.logSets; if (!sets) return;
+    readLogSets(sets);
+    if (+el.dataset.d > 0) sets.push({ ...sets[sets.length - 1] }); else if (sets.length > 1) sets.pop();
+    render();
+  },
   saveEx: (el) => {
-    const sets = [0, 1, 2].map((i) => ({ w: num($('#w' + i).value), r: $('#r' + i).value.trim() === '' ? '' : num($('#r' + i).value) }));
+    const sets = ui.logSets || [];
+    readLogSets(sets);
+    const prior = DB.sessions.find((s) => s.exId === el.dataset.id && s.date === ui.hDate);
     DB.sessions = DB.sessions.filter((s) => !(s.exId === el.dataset.id && s.date === ui.hDate));
-    DB.sessions.push({ id: uid(), exId: el.dataset.id, date: ui.hDate, sets });
-    ui.logEx = null; save(); render(); toast('Workout saved');
+    DB.sessions.push({ ...(prior || {}), id: prior ? prior.id : uid(), exId: el.dataset.id, date: ui.hDate, sets: sets.map((s) => ({ ...s })) });
+    ui.logEx = null; ui.logSets = null; save(); render(); toast('Workout saved');
   },
   addExp: () => { const item = $('#eItem').value.trim(); const amt = num($('#eAmt').value); if (!item || !amt) { (item ? $('#eAmt') : $('#eItem')).focus(); return; } ui.lastCard = $('#eCard').value; DB.expenses.push({ id: uid(), date: $('#eDate').value || todayKey(), item, category: $('#eCat').value, card: ui.lastCard, amount: amt }); save(); render(); toast('Added ' + money(amt)); },
   delExp: (el) => { DB.expenses = DB.expenses.filter((x) => x.id !== el.dataset.id); save(); render(); },

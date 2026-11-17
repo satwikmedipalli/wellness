@@ -49,6 +49,14 @@ function fmtTime(hm) {
   const [h, m] = hm.split(':').map(Number);
   return ((h + 11) % 12) + 1 + ':' + pad(m) + ' ' + (h >= 12 ? 'PM' : 'AM');
 }
+// Workouts: a set is { w: lb (0 = bodyweight), r: reps, t?: seconds held, side?: reps are per side }.
+// Bodyweight / timed exercises (all of Abs by default) progress by adding rounds, not +10 lb.
+const isBodyweight = (ex) => !!ex && (ex.kind === 'bodyweight' || (!ex.kind && ex.group === 'Abs'));
+function setText(s, body) {
+  const amount = s.t ? `${s.t} s` : s.r === '' || s.r == null ? '—' : `${s.r}${s.side ? '/side' : ''}`;
+  if (!body) return `${s.w} lb × ${amount}`;
+  return s.w ? `+${s.w} lb · ${amount}` : amount;
+}
 const sortBlocks = (bl) => bl.sort((a, b) => (mins(a.start) ?? 1e9) - (mins(b.start) ?? 1e9));
 
 // ---------------------------------------------------------------- data shape
@@ -96,6 +104,11 @@ function applyPlan(doc, k, plan) {
   doc.days[k] = { planId: plan.id, planName: plan.name, color: plan.color, blocks: plan.blocks.map((b) => ({ ...b })), done: {}, choices: {}, notes: old ? old.notes || '' : '' };
 }
 function targetWeights(doc, ex, k) {
+  if (isBodyweight(ex)) {
+    const last = doc.sessions.filter((s) => s.exId === ex.id && s.date < k).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+    if (!last) return { rounds: null, reason: 'first session: progress by adding rounds' };
+    return { rounds: last.sets.length, reason: `${last.sets.length} rounds on ${last.date}. Add a round once every round is done with good form` };
+  }
   const ws = weekStart(k);
   const prev = doc.sessions.filter((s) => s.exId === ex.id && s.date < ws).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
   if (!prev) return { weights: ex.start || [], reason: 'starting weights' };
@@ -129,7 +142,7 @@ function describeDay(doc, k) {
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
   const ses = doc.sessions.filter((s) => s.date === k);
-  if (ses.length) out.workouts = ses.map((s) => { const e = doc.exercises.find((x) => x.id === s.exId); return { exercise: e ? e.name : '?', sets: s.sets.map((x) => `${x.w} lb × ${x.r || '—'}`) }; });
+  if (ses.length) out.workouts = ses.map((s) => { const e = doc.exercises.find((x) => x.id === s.exId); return { exercise: e ? e.name : '?', group: e ? e.group : '', sets: s.sets.map((x) => setText(x, isBodyweight(e))), ...(s.note ? { note: s.note } : {}) }; });
   return out;
 }
 
@@ -253,10 +266,17 @@ const TOOLS = [
   },
   {
     name: 'log_workout',
-    description: 'Log sets for an exercise (weight in lb and reps). Creates the exercise if new. Returns this week’s target weights using the user’s +10 lb rule.',
+    description: 'Log sets for an exercise. Weighted lifts: weight in lb + reps; returns next week’s weights by the user’s +10 lb rule. Bodyweight or timed moves (all Abs by default): leave weight out and give reps, or seconds for holds like a plank; per_side=true when reps are counted on each side. One set per round of a circuit. Bodyweight moves progress by adding rounds. Logging the same exercise on the same day again replaces that day’s sets.',
     inputSchema: {
       type: 'object',
-      properties: { date: dateProp, exercise: { type: 'string' }, group: { type: 'string', description: 'Split day for a new exercise: Shoulders & Chest, Arms, Back, Legs, Abs' }, sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number' }, reps: { type: 'number' } }, required: ['weight'] } } },
+      properties: {
+        date: dateProp,
+        exercise: { type: 'string' },
+        group: { type: 'string', description: 'Split day for a new exercise: Shoulders & Chest, Arms, Back, Legs, Abs' },
+        kind: { type: 'string', enum: ['weights', 'bodyweight'], description: 'For a new exercise. Defaults to bodyweight for Abs, weights otherwise.' },
+        sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number', description: 'lb; leave out or 0 for bodyweight' }, reps: { type: 'number' }, seconds: { type: 'number', description: 'For timed holds, e.g. 30 for a 30-second plank' }, per_side: { type: 'boolean', description: 'Reps are per side (e.g. Russian twists 50 each side)' } } } },
+        note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' }
+      },
       required: ['exercise', 'sets']
     }
   },
@@ -286,7 +306,7 @@ function runTool(name, args, doc, tz) {
         choiceLists: doc.choiceLists.map((l) => ({ name: l.name, options: l.options, noRepeatInOneDay: !!l.distinct })),
         categories: doc.categories, cards: doc.cards,
         foodLibrary: doc.foodLibrary.map((f) => `${f.name} (${f.serving}: ${f.cal} cal, ${f.p} P, ${f.c} C, ${f.fib} fib, ${f.f} F)`),
-        exercises: doc.exercises.map((e) => `${e.name} (${e.group})`),
+        exercises: doc.exercises.map((e) => `${e.name} (${e.group}${isBodyweight(e) ? ', bodyweight' : ''})`),
         goals: { proteinG: S.proteinTarget, fiberG: S.fiberTarget }
       }
     };
@@ -397,12 +417,29 @@ function runTool(name, args, doc, tz) {
     case 'log_workout': {
       const k = resolveDate(a.date, tz);
       let ex = doc.exercises.find((e) => norm(e.name) === norm(a.exercise)) || doc.exercises.find((e) => norm(e.name).includes(norm(a.exercise)));
-      const sets = (a.sets || []).map((s) => ({ w: num(s.weight), r: s.reps == null ? '' : num(s.reps) }));
-      if (!ex) { ex = { id: uid(), name: a.exercise, group: a.group || 'Other', start: sets.map((s) => s.w) }; doc.exercises.push(ex); }
+      const sets = (a.sets || []).map((s) => {
+        const set = { w: num(s.weight), r: s.reps == null ? '' : num(s.reps) };
+        if (s.seconds != null && num(s.seconds) > 0) set.t = num(s.seconds);
+        if (s.per_side) set.side = true;
+        return set;
+      });
+      if (!sets.length) throw new Error('Give at least one set.');
+      if (!ex) {
+        const group = a.group || 'Other';
+        const kind = a.kind === 'weights' || a.kind === 'bodyweight' ? a.kind : group === 'Abs' ? 'bodyweight' : 'weights';
+        ex = { id: uid(), name: a.exercise, group, kind, start: kind === 'bodyweight' ? [] : sets.map((s) => s.w) };
+        doc.exercises.push(ex);
+      }
+      const body = isBodyweight(ex);
+      if (!body && sets.some((s) => s.t)) throw new Error(`${ex.name} is a weighted exercise; seconds are for bodyweight or timed moves.`);
+      const prior = doc.sessions.find((s) => s.exId === ex.id && s.date === k);
       doc.sessions = doc.sessions.filter((s) => !(s.exId === ex.id && s.date === k));
-      doc.sessions.push({ id: uid(), exId: ex.id, date: k, sets });
-      const next = targetWeights(doc, ex, addDays(weekStart(k), 7));
-      return { write: true, result: { exercise: ex.name, date: k, sets: sets.map((s) => `${s.w} lb × ${s.r || '—'}`), nextWeek: next } };
+      const session = { id: prior ? prior.id : uid(), exId: ex.id, date: k, sets };
+      const note = a.note != null ? String(a.note) : prior && prior.note;
+      if (note) session.note = note;
+      doc.sessions.push(session);
+      const next = body ? { rounds: sets.length, reason: `${sets.length} rounds today. Add a round once every round is done with good form` } : targetWeights(doc, ex, addDays(weekStart(k), 7));
+      return { write: true, result: { exercise: ex.name, kind: body ? 'bodyweight' : 'weights', date: k, sets: sets.map((s) => setText(s, body)), ...(session.note ? { note: session.note } : {}), [body ? 'next' : 'nextWeek']: next } };
     }
     case 'remove_entries': {
       const fi = new Set(a.food_ids || []), ei = new Set(a.expense_ids || []);
@@ -564,4 +601,4 @@ export function makeHandler({ env, fetchImpl = fetch }) {
   };
 }
 
-export const _test = { runTool, summarize, describeDay, emptyDoc, resolveDate, toHM };
+export const _test = { runTool, summarize, describeDay, emptyDoc, resolveDate, toHM, setText, isBodyweight };
