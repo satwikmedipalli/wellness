@@ -1,0 +1,6 @@
+# Supabase settings for the Wellness server.
+project_id = "wellness"
+
+[functions.wellness]
+# Wellness checks its own secret key, so Supabase's JWT check is turned off.
+verify_jwt = false
