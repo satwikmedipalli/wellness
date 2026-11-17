@@ -169,3 +169,4 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .plan-tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .plan-tabs .plan-item{width:auto}
 .inp.time{width:122px}
+.sheet td.mono,.sheet td.r{white-space:nowrap;overflow-wrap:normal}

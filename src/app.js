@@ -37,7 +37,7 @@ function fmtRange(b) {
 const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
 const r1 = (n) => Math.round(n * 10) / 10;
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-const money = (n) => (DB.settings.currency || '$') + (Math.round(n * 100) / 100).toFixed(2);
+const money = (n) => (n < 0 ? '−' : '') + (DB.settings.currency || '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const sortBlocks = (bl) => bl.sort((a, b) => (mins(a.start) ?? 1e9) - (mins(b.start) ?? 1e9));
 const PLAN_COLORS = ['#5B8A63', '#C9A227', '#3E7795', '#B5654A', '#8A6BAE', '#7C8B4E', '#C2557A', '#4F8C8C'];
 
@@ -86,6 +86,7 @@ function defaults() {
     burns: {},
     exercises: [],
     sessions: [],
+    cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: []
   };
@@ -103,7 +104,7 @@ function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.sa
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
   week: weekStart(todayKey()), month: monthKey(todayKey()), hDate: todayKey(), sMonth: monthKey(todayKey()),
-  logEx: null
+  logEx: null, lastCard: undefined
 };
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
@@ -501,18 +502,24 @@ VIEWS.spending = () => {
   const sum = (a) => a.reduce((s, e) => s + e.amount, 0);
   const byCat = DB.categories.map((c) => ({ c, w: sum(week.filter((e) => e.category === c)), m: sum(month.filter((e) => e.category === c)) }));
   const top = byCat.filter((x) => x.m > 0).sort((a, b) => b.m - a.m)[0];
-  const rows = month.map((e, i) => `<tr><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item)}</td><td class="small">${esc(e.category)}</td><td class="mono r">${money(e.amount)}</td><td class="c"><button class="icon-btn" data-a="delExp" data-id="${e.id}" aria-label="Remove ${esc(e.item)}">${ic('x', 13)}</button></td></tr>`).join('');
+  const byCard = DB.cards.map((c) => ({ c, w: sum(week.filter((e) => e.card === c)), m: sum(month.filter((e) => e.card === c)) }));
+  const noCard = { w: sum(week.filter((e) => !e.card || !DB.cards.includes(e.card))), m: sum(month.filter((e) => !e.card || !DB.cards.includes(e.card))) };
+  const rows = month.map((e, i) => `<tr><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item)}</td><td class="small">${esc(e.category)}</td><td class="small">${e.card ? esc(e.card) : '<span class="faint">—</span>'}</td><td class="mono r">${money(e.amount)}</td><td class="c"><button class="icon-btn" data-a="delExp" data-id="${e.id}" aria-label="Remove ${esc(e.item)}">${ic('x', 13)}</button></td></tr>`).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Spending</span><h1 class="h1">${monthLabel(mk).split(' ')[0]}</h1></div>${dateNav('sNav', 'This month')}</div>
   <div class="stats"><div class="stat"><span class="k">This week</span><span class="v">${money(sum(week))}</span></div><div class="stat"><span class="k">${monthLabel(mk)}</span><span class="v">${money(sum(month))}</span></div><div class="stat"><span class="k">Top category</span><span class="v" style="font-size:17px;font-family:var(--sans);font-weight:600">${top ? esc(top.c) : '—'}</span></div><div class="stat"><span class="k">Entries</span><span class="v">${month.length}</span></div></div>
-  <div class="cols"><div class="grow"><div class="sheet"><table><colgroup><col style="width:40px"><col style="width:90px"><col><col style="width:160px"><col style="width:100px"><col style="width:52px"></colgroup>
-    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td></td></tr>
-    <tr><th class="g">#</th><th>Date</th><th>Item</th><th>Category</th><th class="r">Amount</th><th></th></tr>
-    ${rows || '<tr><td class="g">1</td><td colspan="5" class="faint">No spending logged this month.</td></tr>'}
+  <div class="cols"><div class="grow"><div class="sheet"><table><colgroup><col style="width:40px"><col style="width:84px"><col><col style="width:130px"><col style="width:150px"><col style="width:112px"><col style="width:52px"></colgroup>
+    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td>E</td><td></td></tr>
+    <tr><th class="g">#</th><th>Date</th><th>Item</th><th>Category</th><th>Card</th><th class="r">Amount</th><th></th></tr>
+    ${rows || '<tr><td class="g">1</td><td colspan="6" class="faint">No spending logged this month.</td></tr>'}
   </table>
-  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="eDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">Item<input class="inp" id="eItem" placeholder="Lunch, gas, Netflix…"></label><label class="fld">Category<select class="sel" id="eCat">${DB.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label><label class="fld">Amount<input class="inp num" id="eAmt" placeholder="0.00"></label><button class="btn primary" data-a="addExp">Add</button></div></div></div>
-  <aside class="panel" style="width:300px"><h2 class="h2" style="font-size:22px">By category</h2><div class="sheet"><table><colgroup><col><col style="width:84px"><col style="width:84px"></colgroup><tr><th>Category</th><th class="r">Week</th><th class="r">Month</th></tr>
+  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="eDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">Item<input class="inp" id="eItem" placeholder="Lunch, gas, Netflix…"></label><label class="fld">Category<select class="sel" id="eCat">${DB.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label><label class="fld">Card<select class="sel" id="eCard">${DB.cards.map((c) => `<option ${c === ui.lastCard ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="" ${ui.lastCard === '' ? 'selected' : ''}>Cash / other</option></select></label><label class="fld">Amount<input class="inp num" id="eAmt" placeholder="0.00"></label><button class="btn primary" data-a="addExp">Add</button></div></div></div>
+  <aside class="panel" style="width:310px"><h2 class="h2" style="font-size:22px">By category</h2><div class="sheet"><table><colgroup><col><col style="width:96px"><col style="width:96px"></colgroup><tr><th>Category</th><th class="r">Week</th><th class="r">Month</th></tr>
     ${byCat.map((x) => `<tr><td class="small">${esc(x.c)}</td><td class="mono r small ${x.w ? '' : 'faint'}">${money(x.w)}</td><td class="mono r small ${x.m ? '' : 'faint'}">${money(x.m)}</td></tr>`).join('')}
     <tr class="total"><td>Total</td><td class="mono r small">${money(sum(week))}</td><td class="mono r small">${money(sum(month))}</td></tr></table></div>
+    <h2 class="h2" style="font-size:22px;margin-top:8px">By card</h2><div class="sheet"><table><colgroup><col><col style="width:96px"><col style="width:96px"></colgroup><tr><th>Card</th><th class="r">Week</th><th class="r">Month</th></tr>
+    ${byCard.map((x) => `<tr><td class="small">${esc(x.c)}</td><td class="mono r small ${x.w ? '' : 'faint'}">${money(x.w)}</td><td class="mono r small ${x.m ? '' : 'faint'}">${money(x.m)}</td></tr>`).join('')}
+    ${noCard.m || noCard.w ? `<tr><td class="small muted">Cash / other</td><td class="mono r small">${money(noCard.w)}</td><td class="mono r small">${money(noCard.m)}</td></tr>` : ''}</table></div>
+    <details class="box"><summary>Edit cards</summary><div class="inner"><div class="chips">${DB.cards.map((c, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:4px;cursor:default">${esc(c)}<button class="icon-btn" style="width:20px;height:20px;border:none;background:none" data-a="delCard" data-i="${i}" aria-label="Remove ${esc(c)}">${ic('x', 12, 2.2)}</button></span>`).join('')}</div><input class="inp" placeholder="+ Add card" data-c="addCard" aria-label="Add card"></div></details>
     <details class="box"><summary>Edit categories</summary><div class="inner"><div class="chips">${DB.categories.map((c, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:4px;cursor:default">${esc(c)}<button class="icon-btn" style="width:20px;height:20px;border:none;background:none" data-a="delCat" data-i="${i}" aria-label="Remove ${esc(c)}">${ic('x', 12, 2.2)}</button></span>`).join('')}</div><input class="inp" placeholder="+ Add category" data-c="addCat" aria-label="Add category"></div></details>
   </aside></div>`;
 };
@@ -532,13 +539,13 @@ function summarize(from, to) {
   foodDays.forEach((x) => { if (DB.burns[x.k] != null) { def += DB.burns[x.k] - x.t.cal; defDays++; } });
   const ex = expensesIn(from, to);
   const spend = ex.reduce((a, e) => a + e.amount, 0);
-  const cats = {};
-  ex.forEach((e) => { cats[e.category] = (cats[e.category] || 0) + e.amount; });
+  const cats = {}, cardsT = {};
+  ex.forEach((e) => { cats[e.category] = (cats[e.category] || 0) + e.amount; const k = e.card || 'Cash / other'; cardsT[k] = (cardsT[k] || 0) + e.amount; });
   return {
     planned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null,
     blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks,
     foodDays: foodDays.length, avgCal: avg((t) => t.cal), avgP: avg((t) => t.p), avgFib: avg((t) => t.fib),
-    proteinHit: foodDays.filter((x) => x.t.p >= DB.settings.proteinTarget).length, def, defDays, spend, cats,
+    proteinHit: foodDays.filter((x) => x.t.p >= DB.settings.proteinTarget).length, def, defDays, spend, cats, cardsT,
     workouts: DB.sessions.filter((s) => s.date >= from && s.date <= to).length
   };
 }
@@ -564,6 +571,7 @@ VIEWS.summary = () => {
     ${pickRows}
     ${sec('Health')}${row('Days with food logged', W.foodDays, M.foodDays)}${row('Avg calories', f0(W.avgCal), f0(M.avgCal))}${row('Avg protein (g)', f0(W.avgP), f0(M.avgP))}${row('Avg fiber (g)', f0(W.avgFib), f0(M.avgFib))}${row(`Days protein ≥ ${DB.settings.proteinTarget} g`, W.proteinHit, M.proteinHit)}${row('Total deficit (cal)', W.defDays ? Math.round(W.def) : '—', M.defDays ? Math.round(M.def) : '—')}
     ${sec('Spending')}${row('Total', money(W.spend), money(M.spend))}${[...cats].sort((a, b) => (M.cats[b] || 0) - (M.cats[a] || 0)).map((c) => row(esc(c), money(W.cats[c] || 0), money(M.cats[c] || 0))).join('')}
+    ${(() => { const cs = new Set([...Object.keys(W.cardsT), ...Object.keys(M.cardsT)]); return cs.size ? sec('Spending by card') + [...cs].sort((a, b) => (M.cardsT[b] || 0) - (M.cardsT[a] || 0)).map((c) => row(esc(c), money(W.cardsT[c] || 0), money(M.cardsT[c] || 0))).join('') : ''; })()}
   </table></div><div class="hint" style="margin-top:10px">Week starts Monday. Only days up to today count.</div>`;
 };
 
@@ -643,8 +651,9 @@ const A = {
     DB.sessions.push({ id: uid(), exId: el.dataset.id, date: ui.hDate, sets });
     ui.logEx = null; save(); render(); toast('Workout saved');
   },
-  addExp: () => { const item = $('#eItem').value.trim(); const amt = num($('#eAmt').value); if (!item || !amt) { (item ? $('#eAmt') : $('#eItem')).focus(); return; } DB.expenses.push({ id: uid(), date: $('#eDate').value || todayKey(), item, category: $('#eCat').value, amount: amt }); save(); render(); toast('Added ' + money(amt)); },
+  addExp: () => { const item = $('#eItem').value.trim(); const amt = num($('#eAmt').value); if (!item || !amt) { (item ? $('#eAmt') : $('#eItem')).focus(); return; } ui.lastCard = $('#eCard').value; DB.expenses.push({ id: uid(), date: $('#eDate').value || todayKey(), item, category: $('#eCat').value, card: ui.lastCard, amount: amt }); save(); render(); toast('Added ' + money(amt)); },
   delExp: (el) => { DB.expenses = DB.expenses.filter((x) => x.id !== el.dataset.id); save(); render(); },
+  delCard: (el) => { DB.cards.splice(+el.dataset.i, 1); save(); render(); },
   delCat: (el) => { DB.categories.splice(+el.dataset.i, 1); save(); render(); },
   updSave: async () => { const i = await window.api.updateSet({ repo: $('#updRepo').value, token: $('#updToken').value }); $('#updToken').value = ''; toast(i.configured ? 'Saved' : 'Repo should look like owner/name'); },
   updCheck: async () => {
@@ -680,6 +689,7 @@ const C = {
   listDistinct: (el) => { listById(el.dataset.l).distinct = el.checked; save(); },
   addOpt: (el) => { const v = el.value.trim(); if (v) { listById(el.dataset.l).options.push(v); save(); render(); const n = document.querySelector(`[data-c="addOpt"][data-l="${el.dataset.l}"]`); if (n) n.focus(); } },
   burn: (el) => { if (el.value.trim() === '') delete DB.burns[ui.hDate]; else DB.burns[ui.hDate] = num(el.value); save(); render(); },
+  addCard: (el) => { const v = el.value.trim(); if (v && !DB.cards.includes(v)) { DB.cards.push(v); save(); render(); } },
   addCat: (el) => { const v = el.value.trim(); if (v && !DB.categories.includes(v)) { DB.categories.push(v); save(); render(); } },
   set: (el) => { const f = el.dataset.f; DB.settings[f] = f === 'currency' ? el.value : num(el.value); save(); },
   login: async (el) => { const on = await window.api.setOpenAtLogin(el.checked); el.checked = on; },
