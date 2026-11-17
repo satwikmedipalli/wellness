@@ -213,7 +213,7 @@ function showSyncStatus() {
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
   week: weekStart(todayKey()), month: monthKey(todayKey()), hDate: todayKey(), sMonth: monthKey(todayKey()),
-  logEx: null, logSets: null, lastCard: undefined
+  logEx: null, logSets: null, ab: null, lastCard: undefined
 };
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
@@ -558,6 +558,87 @@ function targetWeights(ex, k) {
   if (num(prev.sets[0].r) >= 15) return { w: w.map((x) => x + 10), why: `${prev.sets[0].r} reps on set 1 last time → +10 lb` };
   return { w, why: 'same as last week' };
 }
+// ---------- ab circuit ----------
+// The Abs exercises are done as one circuit: every move back to back, then rest. Each round is one set
+// in each exercise's session for that day; the grid below shows moves as rows and rounds as columns.
+const SPLIT = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs'];
+const UNIT = { reps: 'reps', side: 'reps each side', sec: 'seconds' };
+const abMoves = () => DB.exercises.map((e, i) => ({ e, i })).filter((x) => isBodyweight(x.e)).sort((a, b) => (a.e.pos ?? a.i) - (b.e.pos ?? b.i)).map((x) => x.e);
+function abUnit(ex) {
+  if (ex.unit) return ex.unit;
+  const f = (lastSession(ex) || { sets: [] }).sets[0];
+  return f && f.t ? 'sec' : f && f.side ? 'side' : 'reps';
+}
+function abDates() {
+  const ids = new Set(abMoves().map((e) => e.id));
+  return [...new Set(DB.sessions.filter((s) => ids.has(s.exId)).map((s) => s.date))].sort().reverse();
+}
+function circuitOn(date) {
+  const rows = abMoves().map((ex) => ({ ex, unit: abUnit(ex), s: DB.sessions.find((x) => x.exId === ex.id && x.date === date) }));
+  const done = rows.filter((r) => r.s);
+  return { date, rows, rounds: Math.max(0, ...done.map((r) => r.s.sets.length)), note: (done.find((r) => r.s.note) || { s: {} }).s.note || '' };
+}
+const setVal = (x, unit) => (unit === 'sec' ? x.t || '' : x.r ?? '');
+const fmtSecs = (n) => (n >= 60 ? `${Math.floor(n / 60)}:${pad(Math.round(n % 60))}` : `${n} s`);
+function abTotal(sets, unit) {
+  const n = sets.reduce((a, x) => a + num(setVal(x, unit)), 0);
+  if (!n) return '—';
+  return unit === 'sec' ? fmtSecs(n) : unit === 'side' ? `${n} <span class="faint">/side</span>` : String(n);
+}
+function abCircuit(k) {
+  const moves = abMoves();
+  if (!moves.length) return `<div class="empty-state" style="padding:22px"><p>Add your ab moves below with split day “Abs (circuit)”. They’ll show here as one circuit: moves down the side, rounds across.</p></div>`;
+  const dates = abDates();
+  const E = ui.ab;
+  const shownDate = E ? E.date : dates.find((d) => d <= k) || null;
+  const c = shownDate ? circuitOn(shownDate) : null;
+  const isDay = shownDate === k;
+  const rounds = E ? E.rounds : c ? c.rounds : 0;
+  const prev = dates.find((d) => d < k);
+  const nextRounds = (isDay ? c.rounds : prev ? circuitOn(prev).rounds : 0) || null;
+  const label = !shownDate ? 'Not logged yet' : isDay ? (k === todayKey() ? 'Today' : shortDay(k)) : `Last time · ${shortDay(shownDate)}`;
+  const cols = Math.max(rounds, 1);
+  const head = `<div class="cbar">
+      <span class="ttl">Ab circuit</span>
+      <span class="pill">${esc(E ? (k === todayKey() ? 'Today' : shortDay(k)) : label)}</span>
+      ${rounds ? `<span class="pill mono">${rounds} round${rounds === 1 ? '' : 's'}</span>` : ''}
+      ${!E && c && c.note ? `<span class="pill">${esc(c.note)}</span>` : ''}
+      <span class="next">${nextRounds ? `Next time <b>${nextRounds + 1}</b> rounds, once all ${nextRounds} feel solid` : 'Progress by adding a round'}</span>
+      ${E ? '' : `<button class="btn ${isDay ? '' : 'primary'} sm" data-a="abEdit">${isDay ? 'Edit' : `Log ${k === todayKey() ? 'today' : shortDay(k)}`}</button>`}
+    </div>`;
+  const colgroup = `<colgroup><col style="width:40px"><col style="width:${E ? 250 : 210}px">${Array.from({ length: cols }, () => '<col>').join('')}<col style="width:110px"></colgroup>`;
+  const thead = `<tr><th class="g">#</th><th>Move</th>${Array.from({ length: cols }, (_, i) => `<th class="rd">R${i + 1}</th>`).join('')}<th class="r">Total</th></tr>`;
+  let body;
+  if (E) {
+    body = moves.map((ex, mi) => {
+      const unit = E.units[ex.id];
+      const vals = E.vals[ex.id];
+      const sets = vals.map((v) => (unit === 'sec' ? { t: num(v) } : { r: v === '' ? '' : num(v) }));
+      return `<tr><td class="g">${mi + 1}</td>
+        <td><div class="row-flex" style="gap:6px;flex-wrap:nowrap"><span style="font-weight:600;flex:1">${esc(ex.name)}</span>
+          <button class="icon-btn sm" data-a="abMove" data-id="${ex.id}" data-d="-1" aria-label="Move ${esc(ex.name)} up" ${mi ? '' : 'disabled'}>↑</button><button class="icon-btn sm" data-a="abMove" data-id="${ex.id}" data-d="1" aria-label="Move ${esc(ex.name)} down" ${mi < moves.length - 1 ? '' : 'disabled'}>↓</button></div>
+          <select class="sel unitsel" data-c="abUnit" data-id="${ex.id}" aria-label="${esc(ex.name)} counted in">${Object.entries(UNIT).map(([u, l]) => `<option value="${u}" ${u === unit ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+        ${vals.map((v, ri) => `<td class="rd"><input class="inp num cell" value="${esc(v)}" data-i="abCell" data-id="${ex.id}" data-r="${ri}" inputmode="numeric" aria-label="${esc(ex.name)} round ${ri + 1}"></td>`).join('')}
+        <td class="tot" id="abTot-${ex.id}">${abTotal(sets, unit)}</td></tr>`;
+    }).join('');
+  } else if (c && c.rounds) {
+    body = c.rows.map((r, mi) => {
+      const sets = r.s ? r.s.sets : [];
+      return `<tr><td class="g">${mi + 1}</td><td><span style="font-weight:600">${esc(r.ex.name)}</span><span class="unit">${UNIT[r.unit]}</span></td>
+        ${Array.from({ length: cols }, (_, i) => `<td class="rd">${sets[i] ? `${esc(setVal(sets[i], r.unit))}${r.unit === 'sec' ? '<span class="faint"> s</span>' : ''}` : '<span class="faint">—</span>'}</td>`).join('')}
+        <td class="tot">${abTotal(sets, r.unit)}</td></tr>`;
+    }).join('');
+  } else {
+    body = moves.map((ex, mi) => `<tr><td class="g">${mi + 1}</td><td><span style="font-weight:600">${esc(ex.name)}</span><span class="unit">${UNIT[abUnit(ex)]}</span></td><td class="rd faint">—</td><td class="tot faint">—</td></tr>`).join('');
+  }
+  const foot = E
+    ? `<div class="addbar"><button class="btn sm" data-a="abRound" data-d="1">${ic('plus', 12, 2.2)} Round</button><button class="btn ghost sm" data-a="abRound" data-d="-1" ${E.rounds > 1 ? '' : 'disabled'}>− Round</button>
+        <label class="fld" style="flex:1;min-width:220px">Note<input class="inp" value="${esc(E.note)}" data-i="abNote" placeholder="e.g. 5 min rest between rounds"></label>
+        <button class="btn ghost" data-a="abCancel">Cancel</button><button class="btn primary" data-a="abSave">Save circuit</button></div>`
+    : dates.length ? `<div class="hist"><span class="small muted">Recent</span>${dates.slice(0, 8).map((d) => `<button class="chip ${d === shownDate ? 'on' : ''}" data-a="hGo" data-k="${d}">${shortDay(d)} · <span class="mono">${circuitOn(d).rounds}</span></button>`).join('')}</div>` : '';
+  return `<div class="sheet circuit">${head}<table>${colgroup}${thead}${body}</table>${foot}</div>`;
+}
+
 VIEWS.health = () => {
   const k = ui.hDate;
   const t = foodTotals(k);
@@ -573,32 +654,26 @@ VIEWS.health = () => {
     return `<tr class="sec"><td class="g"></td><td colspan="8">${m}</td></tr>` + items.map((x) => `<tr><td class="g"></td><td>${esc(x.name)}${x.note ? ` <span class="faint small">· ${esc(x.note)}</span>` : ''}</td><td class="mono small muted">${esc(x.qty)}</td><td class="mono r">${Math.round(x.cal)}</td><td class="mono r">${r1(x.p)}</td><td class="mono r">${r1(x.c)}</td><td class="mono r">${r1(x.fib)}</td><td class="mono r">${r1(x.f)}</td><td class="c"><button class="icon-btn" data-a="delFood" data-id="${x.id}" aria-label="Remove ${esc(x.name)}">${ic('x', 13)}</button></td></tr>`).join('');
   }).join('');
   const lib = DB.foodLibrary.map((f) => `<option value="${esc(f.name)}">${esc(f.serving)} · ${f.cal} cal</option>`).join('');
-  const exRows = DB.exercises.map((ex) => {
-    const body = isBodyweight(ex);
-    const tw = targetWeights(ex, k);
-    const last = lastSession(ex);
-    const today = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
-    const target = body ? (tw.rounds ? `${tw.rounds} rounds` : '—') : tw.w.join(' / ');
-    let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td><td class="small muted">${esc(ex.group)}${body ? ' · bodyweight' : ''}</td>
-      <td class="mono small">${last ? `${shortDay(last.date)} · ${last.sets.map((s) => setText(s, body)).join(' / ')}${body ? ` <span class="faint">(${last.sets.length} rounds)</span>` : ''}${last.note ? ` <span class="faint" style="font-family:var(--sans)">· ${esc(last.note)}</span>` : ''}` : '<span class="faint">—</span>'}</td>
-      <td class="mono" style="font-weight:600">${target} <span class="faint small" style="font-family:var(--sans);font-weight:400">· ${esc(tw.why)}</span></td>
-      <td class="c"><button class="btn sm" data-a="logEx" data-id="${ex.id}">${today ? 'Edit' : 'Log'}</button></td></tr>`;
-    if (ui.logEx === ex.id) {
-      if (!ui.logSets) {
-        const tpl = last && last.sets[0] ? last.sets[0] : { w: 0, r: '' };
-        ui.logSets = today ? today.sets.map((s) => ({ ...s }))
-          : body ? Array.from({ length: tw.rounds || 1 }, () => ({ w: tpl.w || 0, r: tpl.t ? '' : tpl.r, ...(tpl.t ? { t: tpl.t } : {}), ...(tpl.side ? { side: true } : {}) }))
-          : tw.w.map((w) => ({ w, r: '' }));
+  const weighted = DB.exercises.filter((ex) => !isBodyweight(ex));
+  const groups = [...SPLIT.filter((g) => g !== 'Abs'), ...new Set(weighted.map((ex) => ex.group).filter((g) => !SPLIT.includes(g)))];
+  const exRows = groups.map((g) => {
+    const list = weighted.filter((ex) => ex.group === g);
+    if (!list.length) return '';
+    return `<tr class="sec"><td class="g"></td><td colspan="4">${esc(g)}</td></tr>` + list.map((ex) => {
+      const tw = targetWeights(ex, k);
+      const last = lastSession(ex);
+      const today = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
+      let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
+        <td class="mono small">${last ? `<span class="muted">${shortDay(last.date)}</span> · ${last.sets.map((x) => setText(x, false)).join(' / ')}` : '<span class="faint">—</span>'}</td>
+        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${esc(tw.why)}</span></td>
+        <td class="c"><button class="btn sm" data-a="logEx" data-id="${ex.id}">${today ? 'Edit' : 'Log'}</button></td></tr>`;
+      if (ui.logEx === ex.id) {
+        if (!ui.logSets) ui.logSets = today ? today.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
+        const cells = ui.logSets.map((x, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(x.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
+        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex">${cells}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
       }
-      const sets = ui.logSets;
-      const timed = body && sets.some((s) => s.t);
-      const cells = sets.map((s, i) => body
-        ? `<span class="small muted">Round ${i + 1}</span>${timed ? `<input class="inp num" id="t${i}" value="${esc(s.t || '')}" placeholder="sec" aria-label="Round ${i + 1} seconds"><span class="faint">s</span>` : `<input class="inp num" id="r${i}" value="${esc(s.r)}" placeholder="reps" aria-label="Round ${i + 1} reps"><span class="faint">${s.side ? '/side' : 'reps'}</span>`}`
-        : `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(s.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(s.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
-      const roundBtns = body ? `<button class="btn sm" data-a="exRound" data-d="1" aria-label="Add a round">${ic('plus', 12, 2.2)} Round</button>${sets.length > 1 ? '<button class="btn ghost sm" data-a="exRound" data-d="-1">− Round</button>' : ''}` : '';
-      row += `<tr class="chiprow"><td class="g"></td><td colspan="5"><div class="row-flex">${cells}${roundBtns}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
-    }
-    return row;
+      return row;
+    }).join('');
   }).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Health</span><div class="row-flex" style="align-items:baseline;gap:14px"><h1 class="h1">${DOW[parseKey(k).getDay()]}</h1><span class="h1sub">${longDate(k)}</span></div></div>${dateNav('hNav', k === todayKey() ? 'Today' : 'Go to today')}</div>
   <div class="stats">
@@ -633,14 +708,16 @@ VIEWS.health = () => {
     ${DB.foodLibrary.map((f) => `<tr><td>${esc(f.name)}${f.note ? ` <span class="faint small">· ${esc(f.note)}</span>` : ''}</td><td class="small muted">${esc(f.serving)}</td><td class="mono r">${f.cal}</td><td class="mono r">${f.p}</td><td class="mono r">${f.c}</td><td class="mono r">${f.fib}</td><td class="mono r">${f.f}</td><td class="c"><button class="icon-btn" data-a="delLib" data-id="${f.id}" aria-label="Remove ${esc(f.name)}">${ic('x', 13)}</button></td></tr>`).join('')}
     </table><div class="addbar"><input class="inp" id="lName" placeholder="Food" style="flex:1;min-width:160px" aria-label="Food name"><input class="inp" id="lSrv" placeholder="Serving" style="width:110px" aria-label="Serving"><input class="inp num" id="lCal" placeholder="Cal" aria-label="Calories"><input class="inp num" id="lP" placeholder="P" aria-label="Protein"><input class="inp num" id="lC" placeholder="C" aria-label="Carbs"><input class="inp num" id="lFib" placeholder="Fib" aria-label="Fiber"><input class="inp num" id="lF" placeholder="F" aria-label="Fat"><button class="btn" data-a="addLib">Add to library</button></div></div></div></details>
 
-  <div class="section"><div class="section-head"><h2 class="h2">Workouts</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week — once per week. Abs and bodyweight moves: add a round.</span></div>
-  <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:180px"><col style="width:130px"><col><col><col style="width:80px"></colgroup>
-    <tr><th class="g">#</th><th>Exercise</th><th>Day</th><th>Last session</th><th>This week’s weights</th><th></th></tr>
-    ${exRows || '<tr><td class="g">1</td><td colspan="5" class="faint">Add the exercises from your split (Shoulders & Chest, Arms, Back, Legs).</td></tr>'}
+  <div class="section"><div class="section-head"><h2 class="h2">Workouts</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week, once per week. Ab circuit: add a round when every round feels solid.</span></div>
+  ${abCircuit(k)}
+  <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:200px"><col><col style="width:250px"><col style="width:80px"></colgroup>
+    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td></td></tr>
+    <tr><th class="g">#</th><th>Lift</th><th>Last session</th><th>This week (lb)</th><th></th></tr>
+    ${exRows || '<tr><td class="g">1</td><td colspan="4" class="faint">Add the lifts from your split (Shoulders & Chest, Arms, Back, Legs) below.</td></tr>'}
   </table>
   <div class="addbar"><input class="inp" id="exName" placeholder="Exercise, e.g. Lat pulldown" style="flex:1;min-width:180px" aria-label="Exercise name">
-    <select class="sel" id="exGroup" aria-label="Split day"><option>Shoulders & Chest</option><option>Arms</option><option>Back</option><option>Legs</option><option>Abs</option></select>
-    <span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight">
+    <select class="sel" id="exGroup" aria-label="Split day" data-c="exGroup"><option>Shoulders & Chest</option><option>Arms</option><option>Back</option><option>Legs</option><option value="Abs">Abs (circuit)</option></select>
+    <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
     <button class="btn" data-a="addEx">Add exercise</button></div></div></div>`;
 };
 
@@ -768,7 +845,7 @@ const A = {
   dayNav: (el) => { const d = +el.dataset.d; ui.date = d === 0 ? todayKey() : addDays(ui.date, d); ui.open = null; ui.editDay = false; render(); },
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
-  hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; render(); },
+  hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
   sNav: (el) => { const d = +el.dataset.d; ui.sMonth = d === 0 ? monthKey(todayKey()) : addMonths(ui.sMonth, d); render(); },
   openDay: (el) => { ui.date = el.dataset.k; ui.view = 'today'; ui.open = null; ui.editDay = false; render(); },
   tick: (el) => { const d = DB.days[ui.date]; d.done[el.dataset.b] = !d.done[el.dataset.b]; save(); render(); },
@@ -814,15 +891,58 @@ const A = {
   addEx: () => {
     const n = $('#exName').value.trim(); if (!n) return;
     const group = $('#exGroup').value, body = group === 'Abs';
-    DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)] });
+    DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)], ...(body ? { pos: abMoves().length } : {}) });
     save(); render();
   },
   logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; render(); },
-  exRound: (el) => {
-    const sets = ui.logSets; if (!sets) return;
-    readLogSets(sets);
-    if (+el.dataset.d > 0) sets.push({ ...sets[sets.length - 1] }); else if (sets.length > 1) sets.pop();
+  hGo: (el) => { ui.hDate = el.dataset.k; ui.ab = null; ui.logEx = null; render(); },
+  abEdit: () => {
+    const k = ui.hDate, dates = abDates();
+    const src = dates.includes(k) ? k : dates.find((d) => d < k);
+    const c = src ? circuitOn(src) : null;
+    const rounds = (c && c.rounds) || 1;
+    const vals = {}, units = {};
+    abMoves().forEach((ex) => {
+      units[ex.id] = abUnit(ex);
+      const row = c && c.rows.find((r) => r.ex.id === ex.id);
+      const sets = row && row.s ? row.s.sets : [];
+      vals[ex.id] = Array.from({ length: rounds }, (_, i) => (sets[i] ? String(setVal(sets[i], units[ex.id])) : sets.length ? String(setVal(sets[sets.length - 1], units[ex.id])) : ''));
+    });
+    ui.ab = { date: k, rounds, vals, units, note: c ? c.note : '' };
     render();
+  },
+  abRound: (el) => {
+    const E = ui.ab; if (!E) return;
+    if (+el.dataset.d > 0) { E.rounds++; Object.values(E.vals).forEach((v) => v.push(v.length ? v[v.length - 1] : '')); }
+    else if (E.rounds > 1) { E.rounds--; Object.values(E.vals).forEach((v) => v.pop()); }
+    render();
+  },
+  abMove: (el) => {
+    const moves = abMoves();
+    const i = moves.findIndex((e) => e.id === el.dataset.id), j = i + +el.dataset.d;
+    if (i < 0 || j < 0 || j >= moves.length) return;
+    [moves[i], moves[j]] = [moves[j], moves[i]];
+    moves.forEach((e, n) => { e.pos = n; });
+    save(); render();
+  },
+  abCancel: () => { ui.ab = null; render(); },
+  abSave: () => {
+    const E = ui.ab; if (!E) return;
+    let logged = 0;
+    abMoves().forEach((ex) => {
+      const unit = E.units[ex.id];
+      ex.unit = unit;
+      const sets = E.vals[ex.id].filter((v) => String(v).trim() !== '' && num(v) > 0)
+        .map((v) => (unit === 'sec' ? { w: 0, r: '', t: num(v) } : { w: 0, r: num(v), ...(unit === 'side' ? { side: true } : {}) }));
+      const prior = DB.sessions.find((s) => s.exId === ex.id && s.date === E.date);
+      DB.sessions = DB.sessions.filter((s) => !(s.exId === ex.id && s.date === E.date));
+      if (!sets.length) return;
+      const ses = { ...(prior || {}), id: prior ? prior.id : uid(), exId: ex.id, date: E.date, sets };
+      if (E.note.trim()) ses.note = E.note.trim(); else delete ses.note;
+      DB.sessions.push(ses);
+      logged++;
+    });
+    ui.ab = null; save(); render(); toast(logged ? 'Circuit saved' : 'Circuit cleared');
   },
   saveEx: (el) => {
     const sets = ui.logSets || [];
@@ -859,6 +979,8 @@ const A = {
 };
 
 const C = {
+  abUnit: (el) => { if (ui.ab) { ui.ab.units[el.dataset.id] = el.value; render(); } },
+  exGroup: (el) => { const w = $('#exWts'); if (w) w.style.display = el.value === 'Abs' ? 'none' : ''; },
   blk: (el) => {
     const b = scopeBlocks(el.dataset.s).find((x) => x.id === el.dataset.b);
     b[el.dataset.f] = el.value;
@@ -891,6 +1013,14 @@ const C = {
 
 // food autofill from library
 const I = {
+  abCell: (el) => {
+    const E = ui.ab; if (!E) return;
+    E.vals[el.dataset.id][+el.dataset.r] = el.value.trim();
+    const unit = E.units[el.dataset.id];
+    const t = $('#abTot-' + el.dataset.id);
+    if (t) t.innerHTML = abTotal(E.vals[el.dataset.id].map((v) => (unit === 'sec' ? { t: num(v) } : { r: num(v) })), unit);
+  },
+  abNote: (el) => { if (ui.ab) ui.ab.note = el.value; },
   foodPick: () => {
     const name = $('#fName').value.trim().toLowerCase();
     const lib = DB.foodLibrary.find((f) => f.name.toLowerCase() === name);

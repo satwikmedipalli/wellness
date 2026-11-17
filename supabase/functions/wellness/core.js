@@ -141,7 +141,8 @@ function describeDay(doc, k) {
   if (burn != null) { out.food.burned = burn; out.food.deficit = Math.round(burn - t.calories); }
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
-  const ses = doc.sessions.filter((s) => s.date === k);
+  const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
+  const ses = doc.sessions.filter((s) => s.date === k).sort((a, b) => exOrder(a) - exOrder(b));
   if (ses.length) out.workouts = ses.map((s) => { const e = doc.exercises.find((x) => x.id === s.exId); return { exercise: e ? e.name : '?', group: e ? e.group : '', sets: s.sets.map((x) => setText(x, isBodyweight(e))), ...(s.note ? { note: s.note } : {}) }; });
   return out;
 }
@@ -275,7 +276,8 @@ const TOOLS = [
         group: { type: 'string', description: 'Split day for a new exercise: Shoulders & Chest, Arms, Back, Legs, Abs' },
         kind: { type: 'string', enum: ['weights', 'bodyweight'], description: 'For a new exercise. Defaults to bodyweight for Abs, weights otherwise.' },
         sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number', description: 'lb; leave out or 0 for bodyweight' }, reps: { type: 'number' }, seconds: { type: 'number', description: 'For timed holds, e.g. 30 for a 30-second plank' }, per_side: { type: 'boolean', description: 'Reps are per side (e.g. Russian twists 50 each side)' } } } },
-        note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' }
+        note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' },
+        position: { type: 'number', description: 'Bodyweight only: this move’s place in the ab circuit, 1 = first. Other moves shift to make room.' }
       },
       required: ['exercise', 'sets']
     }
@@ -431,6 +433,11 @@ function runTool(name, args, doc, tz) {
         doc.exercises.push(ex);
       }
       const body = isBodyweight(ex);
+      if (body && a.position != null) {
+        const moves = doc.exercises.map((e, i) => ({ e, i })).filter((x) => isBodyweight(x.e)).sort((x, y) => (x.e.pos ?? x.i) - (y.e.pos ?? y.i)).map((x) => x.e).filter((e) => e !== ex);
+        moves.splice(Math.max(0, Math.min(moves.length, Math.round(num(a.position)) - 1)), 0, ex);
+        moves.forEach((e, n) => { e.pos = n; });
+      }
       if (!body && sets.some((s) => s.t)) throw new Error(`${ex.name} is a weighted exercise; seconds are for bodyweight or timed moves.`);
       const prior = doc.sessions.find((s) => s.exId === ex.id && s.date === k);
       doc.sessions = doc.sessions.filter((s) => !(s.exId === ex.id && s.date === k));
