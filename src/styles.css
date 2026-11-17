@@ -74,11 +74,19 @@ textarea.inp{height:auto;padding:8px 9px;resize:vertical;line-height:1.45;width:
 label.fld{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--ink2);text-transform:uppercase;letter-spacing:.06em}
 
 /* now card + ring */
-.now{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--nowBg);border-radius:12px;width:330px;max-width:100%}
-.now svg{stroke:var(--nowIcon)}
-.now .k{font-size:10.5px;color:var(--nowSub);text-transform:uppercase;letter-spacing:.07em}
-.now .v{font-size:15px;font-weight:600;color:var(--nowInk)}
-.now .n{font-family:var(--mono);font-size:11.5px;color:var(--nowSub);margin-left:auto;text-align:right}
+.now{width:340px;max-width:100%;background:var(--card);border:1px solid var(--line2);border-radius:12px;padding:12px 16px 13px;display:flex;flex-direction:column;gap:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.now-top{display:flex;align-items:center;gap:7px;font-size:11px}
+.now-k{color:var(--accT);font-weight:700;text-transform:uppercase;letter-spacing:.09em}
+.now-until{color:var(--ink2)}
+.now-left{margin-left:auto;color:var(--ink2);font-size:11.5px}
+.now-title{font-family:var(--serif);font-size:24px;font-weight:600;line-height:1.1;color:var(--ink)}
+.now-bar{height:4px;background:var(--soft2);border-radius:2px;overflow:hidden;margin-top:2px}
+.now-bar>i{display:block;height:100%;background:var(--acc);border-radius:2px}
+.now-next{font-size:12px;color:var(--ink2);padding-top:6px;border-top:1px solid var(--line)}
+.now-next .mono{color:var(--ink)}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 0 color-mix(in srgb,var(--acc) 45%,transparent);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--acc) 45%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
 .ring{position:relative;width:88px;height:88px;flex-shrink:0}
 .ring .in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .ring .pct{font-family:var(--mono);font-size:19px;font-weight:500}
