@@ -96,6 +96,7 @@ const store = window.api || {
   save: async (d) => { localStorage.setItem('wellness-data', JSON.stringify(d)); return true; }
 };
 let DB = null;
+let APP_VERSION = null;
 let saveTimer = null;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => store.save(DB), 250); }
 
@@ -166,7 +167,7 @@ const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', '
 function renderNav() {
   $('#nav').innerHTML = NAV.map(([k, l]) => `<button class="nav ${ui.view === k ? 'on' : ''}" data-a="go" data-v="${k}" ${ui.view === k ? 'aria-current="page"' : ''}>${ic(k, 17)}${l}</button>`).join('');
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  $('#sidefoot').innerHTML = `Sage · ${dark ? 'Dark' : 'Light'}<br>Follows your Mac’s appearance`;
+  $('#sidefoot').innerHTML = `Sage · ${dark ? 'Dark' : 'Light'}<br>Follows your Mac’s appearance${APP_VERSION ? `<br><span class="mono">v${APP_VERSION}</span>` : ''}`;
 }
 function render() {
   renderNav();
@@ -734,5 +735,6 @@ if (window.api && window.api.onUpdateReady) window.api.onUpdateReady((r) => {
   DB = saved ? Object.assign(defaults(), saved) : defaults();
   if (!saved) save();
   render();
+  if (window.api && window.api.updateInfo) { try { APP_VERSION = (await window.api.updateInfo()).version; renderNav(); } catch {} }
   if (window.api) { const on = await window.api.getOpenAtLogin(); const c = $('#loginChk'); if (c) c.checked = on; }
 })();
