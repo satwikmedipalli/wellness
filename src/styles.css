@@ -217,3 +217,7 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .setgrid tr th:first-child{text-align:left;padding-right:6px}
 .setgrid td{padding:0;border:none;background:none!important}
 .setgrid td .inp.num{width:84px;text-align:center}
+
+/* workout burn line */
+.burnline{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--ink2)}
+.burnline .big{font-size:20px;font-weight:600;color:var(--accT)}
