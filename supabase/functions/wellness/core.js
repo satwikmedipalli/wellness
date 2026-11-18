@@ -63,7 +63,7 @@ const sortBlocks = (bl) => bl.sort((a, b) => (mins(a.start) ?? 1e9) - (mins(b.st
 export function emptyDoc() {
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$' },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68 },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [], days: {}, foodLibrary: [], foods: [], burns: {}, exercises: [], sessions: [], training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
@@ -136,6 +136,21 @@ function trainingOn(doc, k) {
   const lift = ex.find((e) => !isBodyweight(e));
   return lift ? lift.group : null;
 }
+// Estimated calories a workout burns, on top of the resting day. Every set is taken to failure, so:
+// - lifts: vigorous weight training, MET 6, about 3 min per set including rest;
+// - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
+// kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
+function workoutBurn(doc, k) {
+  const kg = num(doc.settings && doc.settings.bodyKg) || 68;
+  let liftSets = 0, abSecs = 0;
+  doc.sessions.filter((s) => s.date === k).forEach((s) => {
+    const ex = doc.exercises.find((e) => e.id === s.exId);
+    if (!ex) return;
+    if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
+    else liftSets += s.sets.length;
+  });
+  return { kcal: Math.round(5 * kg * (liftSets * 3 / 60) + 7 * kg * (abSecs / 3600)), liftSets, circuitMinutes: Math.round(abSecs / 60), method: 'estimate: sets to failure; lifts MET 6 at ~3 min/set, ab circuit MET 8 for work time' };
+}
 function describeDay(doc, k) {
   const day = doc.days[k];
   const t = foodTotals(doc, k);
@@ -163,6 +178,7 @@ function describeDay(doc, k) {
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
   const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
   const ses = doc.sessions.filter((s) => s.date === k).sort((a, b) => exOrder(a) - exOrder(b));
+  if (ses.length) out.workoutBurn = workoutBurn(doc, k);
   if (ses.length) out.workouts = ses.map((s) => { const e = doc.exercises.find((x) => x.id === s.exId); return { exercise: e ? e.name : '?', group: e ? e.group : '', sets: s.sets.map((x) => setText(x, isBodyweight(e))), ...(s.note ? { note: s.note } : {}) }; });
   return out;
 }

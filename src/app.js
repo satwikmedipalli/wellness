@@ -65,7 +65,7 @@ function defaults() {
   const F = (name, serving, cal, f, c, fib, p, note) => ({ id: uid(), name, serving, cal, f, c, fib, p, note: note || '' });
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$' },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68 },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [],
     days: {},
@@ -704,6 +704,23 @@ function liftsTable(k, group) {
     <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
     <button class="btn" data-a="addEx">Add exercise</button></div></div>`;
 }
+// Estimated calories a workout burns, on top of the resting day. Every set is taken to failure, so:
+// - lifts: vigorous weight training, MET 6, about 3 min per set including rest;
+// - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
+// kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
+function workoutBurn(k) {
+  const kg = num(DB.settings.bodyKg) || 68;
+  let liftSets = 0, abSecs = 0;
+  DB.sessions.filter((s) => s.date === k).forEach((s) => {
+    const ex = DB.exercises.find((e) => e.id === s.exId);
+    if (!ex) return;
+    if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
+    else liftSets += s.sets.length;
+  });
+  const liftMin = liftSets * 3, abMin = abSecs / 60;
+  const kcal = Math.round(5 * kg * (liftMin / 60) + 7 * kg * (abMin / 60));
+  return { kcal, liftSets, abMin: Math.round(abMin), mins: Math.round(liftMin + abMin) };
+}
 function workoutsSection(k) {
   const tr = trainingOn(k);
   const seg = `<div class="seg daytype" role="group" aria-label="Training for ${shortDay(k)}">${DAY_TYPES.map((t) => `<button class="${tr.type === t ? 'on' : ''}" data-a="setTrain" data-t="${esc(t)}" aria-pressed="${tr.type === t}">${t === 'Abs' ? 'Ab day' : t === 'Rest' ? 'Rest day' : esc(t)}</button>`).join('')}</div>`;
@@ -712,8 +729,10 @@ function workoutsSection(k) {
   else if (tr.type === 'Abs') body = abCircuit(k);
   else if (tr.type) body = liftsTable(k, tr.type);
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
+  const wb = workoutBurn(k);
+  const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
   return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Ab circuit: add a round when every round feels solid.</span></div>
-  ${seg}${body}</div>`;
+  ${seg}${burnLine}${body}</div>`;
 }
 
 VIEWS.health = () => {
@@ -735,6 +754,7 @@ VIEWS.health = () => {
   <div class="stats">
     <div class="stat"><span class="k">Eaten</span><span class="v">${Math.round(t.cal)}</span></div>
     <div class="stat"><span class="k">Burned</span><input class="inp num" style="width:110px;height:34px;font-size:18px" value="${burn ?? ''}" placeholder="enter" data-c="burn" aria-label="Calories burned"></div>
+    <div class="stat"><span class="k">Workout burn</span><span class="v">${(() => { const b = workoutBurn(k).kcal; return b ? '~' + b : '—'; })()}</span></div>
     <div class="stat"><span class="k">Deficit</span><span class="v">${burn != null ? Math.round(burn - t.cal) : '—'}</span></div>
     <div class="stat"><span class="k">Protein · ${S.proteinTarget} g goal</span><span class="v">${r1(t.p)}</span><div class="bar"><i style="width:${Math.min(100, pct(t.p, S.proteinTarget))}%"></i></div></div>
     <div class="stat"><span class="k">Fiber · ${S.fiberTarget} g goal</span><span class="v">${r1(t.fib)}</span><div class="bar alt"><i style="width:${Math.min(100, pct(t.fib, S.fiberTarget))}%"></i></div></div>
@@ -856,7 +876,7 @@ VIEWS.settings = () => {
   const S = DB.settings;
   return `<div class="head"><div class="head-title"><span class="kicker">Settings</span><h1 class="h1">Preferences</h1></div></div>
   <div class="sheet" style="max-width:640px;padding:16px;display:flex;flex-direction:column;gap:14px">
-    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label></div>
+    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label></div>
     ${window.api ? `<label class="row-flex small"><input type="checkbox" id="loginChk" data-c="login"> Open Wellness when I log in (so alerts keep coming)</label>
     <div class="row-flex"><button class="btn" data-a="testNote">Send a test notification</button><span class="hint">If nothing shows, allow Wellness in System Settings → Notifications.</span></div>` : '<div class="hint">Running in a browser preview: notifications and open-at-login work in the Mac app.</div>'}
     ${window.api && window.api.updateInfo ? `<div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:10px">
