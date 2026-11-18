@@ -758,7 +758,6 @@ VIEWS.health = () => {
   <div class="stats">
     <div class="stat"><span class="k">Eaten</span><span class="v">${Math.round(t.cal)}</span></div>
     <div class="stat"><span class="k">Burned</span><input class="inp num" style="width:110px;height:34px;font-size:18px" value="${burn ?? ''}" placeholder="enter" data-c="burn" aria-label="Calories burned"></div>
-    <div class="stat"><span class="k">Workout burn</span><span class="v">${(() => { const b = workoutBurn(k).kcal; return b ? '~' + b : '—'; })()}</span></div>
     <div class="stat"><span class="k">Deficit</span><span class="v">${burn != null ? Math.round(burn - t.cal) : '—'}</span></div>
     <div class="stat"><span class="k">Protein · ${S.proteinTarget} g goal</span><span class="v">${r1(t.p)}</span><div class="bar"><i style="width:${Math.min(100, pct(t.p, S.proteinTarget))}%"></i></div></div>
     <div class="stat"><span class="k">Fiber · ${S.fiberTarget} g goal</span><span class="v">${r1(t.fib)}</span><div class="bar alt"><i style="width:${Math.min(100, pct(t.fib, S.fiberTarget))}%"></i></div></div>
