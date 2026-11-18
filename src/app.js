@@ -671,12 +671,13 @@ function liftsTable(k, group) {
       let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
         <td class="mono">${day ? day.sets.map((x) => setText(x, false)).join(' / ') : '<span class="faint">—</span>'}</td>
         <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span>
-          <button class="rulechip" data-a="exRuleOpen" data-id="${ex.id}" aria-expanded="${ui.ruleEx === ex.id}" title="How this lift moves up">${ex.rule === 'manual' ? 'manual' : `+${exStep(ex)} lb${ex.rule === 'try' ? ' · try' : ''}`}</button></td>
+          <button class="rulechip" data-a="exRuleOpen" data-id="${ex.id}" aria-expanded="${ui.ruleEx === ex.id}" title="How this lift moves up">${ex.rule === 'manual' ? 'manual' : `+${exStep(ex)} lb${ex.rule === 'try' ? ' · try' : ''}`}${toFailure(ex) ? '' : ' · not to failure'}</button></td>
         <td class="c"><button class="btn sm ${day ? '' : 'primary'}" data-a="logEx" data-id="${ex.id}">${day ? 'Edit' : 'Log'}</button></td></tr>`;
       if (ui.ruleEx === ex.id) {
         row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex ruleedit">
           <span class="small muted">${esc(ex.name)} moves up by</span><input class="inp num" id="ruleStep" value="${exStep(ex)}" aria-label="Step in lb"><span class="faint">lb per set, when</span>
           <select class="sel" id="ruleKind" aria-label="Rule">${Object.entries(RULES).map(([r, l]) => `<option value="${r}" ${r === (ex.rule || 'reps15') ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <label class="row-flex small" style="gap:6px"><input type="checkbox" id="ruleFail" ${toFailure(ex) ? 'checked' : ''}> Sets to failure</label>
           <button class="btn primary sm" data-a="exRuleSave" data-id="${ex.id}">Save</button><button class="btn ghost sm" data-a="exRuleOpen" data-id="${ex.id}">Cancel</button></div></td></tr>`;
       }
       if (ui.logEx === ex.id) {
@@ -704,22 +705,25 @@ function liftsTable(k, group) {
     <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
     <button class="btn" data-a="addEx">Add exercise</button></div></div>`;
 }
-// Estimated calories a workout burns, on top of the resting day. Every set is taken to failure, so:
-// - lifts: vigorous weight training, MET 6, about 3 min per set including rest;
+// Estimated calories a workout burns, on top of the resting day. Sets are taken to failure unless marked otherwise:
+// - lifts: vigorous weight training, MET 6 (MET 3.5 for sets not to failure), about 3 min per set including rest;
 // - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
 // kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
+// Every lift is taken to failure except the ones marked otherwise; traps (shrugs) and wrist curls default to not.
+const toFailure = (ex) => (ex.failure != null ? !!ex.failure : !/trap|shrug|wrist curl/i.test(ex.name || ''));
 function workoutBurn(k) {
   const kg = num(DB.settings.bodyKg) || 68;
-  let liftSets = 0, abSecs = 0;
+  let liftSets = 0, easySets = 0, abSecs = 0;
   DB.sessions.filter((s) => s.date === k).forEach((s) => {
     const ex = DB.exercises.find((e) => e.id === s.exId);
     if (!ex) return;
     if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
-    else liftSets += s.sets.length;
+    else if (toFailure(ex)) liftSets += s.sets.length;
+    else easySets += s.sets.length;
   });
-  const liftMin = liftSets * 3, abMin = abSecs / 60;
-  const kcal = Math.round(5 * kg * (liftMin / 60) + 7 * kg * (abMin / 60));
-  return { kcal, liftSets, abMin: Math.round(abMin), mins: Math.round(liftMin + abMin) };
+  const abMin = abSecs / 60;
+  const kcal = Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + 7 * kg * (abMin / 60));
+  return { kcal, liftSets, easySets, abMin: Math.round(abMin), mins: Math.round((liftSets + easySets) * 3 + abMin) };
 }
 function workoutsSection(k) {
   const tr = trainingOn(k);
@@ -730,7 +734,7 @@ function workoutsSection(k) {
   else if (tr.type) body = liftsTable(k, tr.type);
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
   const wb = workoutBurn(k);
-  const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
+  const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.easySets ? `${wb.easySets} not to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
   return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Ab circuit: add a round when every round feels solid.</span></div>
   ${seg}${burnLine}${body}</div>`;
 }
@@ -970,7 +974,7 @@ const A = {
   exRuleOpen: (el) => { ui.ruleEx = ui.ruleEx === el.dataset.id ? null : el.dataset.id; ui.logEx = null; render(); },
   exRuleSave: (el) => {
     const ex = DB.exercises.find((e) => e.id === el.dataset.id); if (!ex) return;
-    ex.step = num($('#ruleStep').value) || 10; ex.rule = $('#ruleKind').value;
+    ex.step = num($('#ruleStep').value) || 10; ex.rule = $('#ruleKind').value; ex.failure = $('#ruleFail').checked;
     ui.ruleEx = null; save(); render(); toast('Saved how ' + ex.name + ' moves up');
   },
   setTrain: (el) => {
