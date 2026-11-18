@@ -136,20 +136,23 @@ function trainingOn(doc, k) {
   const lift = ex.find((e) => !isBodyweight(e));
   return lift ? lift.group : null;
 }
-// Estimated calories a workout burns, on top of the resting day. Every set is taken to failure, so:
-// - lifts: vigorous weight training, MET 6, about 3 min per set including rest;
+// Estimated calories a workout burns, on top of the resting day. Sets are taken to failure unless marked otherwise:
+// - lifts: vigorous weight training, MET 6 (MET 3.5 for sets not to failure), about 3 min per set including rest;
 // - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
 // kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
+// Every lift is taken to failure except the ones marked otherwise; traps (shrugs) and wrist curls default to not.
+const toFailure = (ex) => (ex.failure != null ? !!ex.failure : !/trap|shrug|wrist curl/i.test(ex.name || ''));
 function workoutBurn(doc, k) {
   const kg = num(doc.settings && doc.settings.bodyKg) || 68;
-  let liftSets = 0, abSecs = 0;
+  let liftSets = 0, easySets = 0, abSecs = 0;
   doc.sessions.filter((s) => s.date === k).forEach((s) => {
     const ex = doc.exercises.find((e) => e.id === s.exId);
     if (!ex) return;
     if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
-    else liftSets += s.sets.length;
+    else if (toFailure(ex)) liftSets += s.sets.length;
+    else easySets += s.sets.length;
   });
-  return { kcal: Math.round(5 * kg * (liftSets * 3 / 60) + 7 * kg * (abSecs / 3600)), liftSets, circuitMinutes: Math.round(abSecs / 60), method: 'estimate: sets to failure; lifts MET 6 at ~3 min/set, ab circuit MET 8 for work time' };
+  return { kcal: Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + 7 * kg * (abSecs / 3600)), setsToFailure: liftSets, setsNotToFailure: easySets, circuitMinutes: Math.round(abSecs / 60), method: 'estimate: lifts MET 6 to failure / 3.5 not, ~3 min per set; ab circuit MET 8 for work time' };
 }
 function describeDay(doc, k) {
   const day = doc.days[k];
@@ -325,7 +328,7 @@ const TOOLS = [
   {
     name: 'set_exercise',
     description: 'Change how a weighted lift progresses without logging a session: step (lb added to every set when it moves up) and rule (reps15, try or manual). Also renames or moves it to another split day.',
-    inputSchema: { type: 'object', properties: { exercise: { type: 'string' }, step: { type: 'number' }, rule: { type: 'string', enum: ['reps15', 'try', 'manual'] }, group: { type: 'string' }, rename: { type: 'string' } }, required: ['exercise'] }
+    inputSchema: { type: 'object', properties: { exercise: { type: 'string' }, step: { type: 'number' }, rule: { type: 'string', enum: ['reps15', 'try', 'manual'] }, to_failure: { type: 'boolean', description: 'Whether its sets go to failure (default true; traps/shrugs and wrist curls default false). Used for the calorie estimate.' }, group: { type: 'string' }, rename: { type: 'string' } }, required: ['exercise'] }
   },
   {
     name: 'set_training_day',
@@ -504,9 +507,10 @@ function runTool(name, args, doc, tz) {
       if (!ex) throw new Error(`No exercise called "${a.exercise}". Exercises: ${doc.exercises.map((e) => e.name).join(', ')}.`);
       if (isBodyweight(ex) && (a.step != null || a.rule != null)) throw new Error(`${ex.name} is part of the ab circuit; it progresses by rounds.`);
       setProgression(ex, a);
+      if (a.to_failure != null) ex.failure = !!a.to_failure;
       if (a.group) ex.group = a.group;
       if (a.rename) ex.name = a.rename;
-      return { write: true, result: { exercise: ex.name, group: ex.group, step: num(ex.step) || 10, rule: ex.rule || 'reps15', nextWeek: isBodyweight(ex) ? null : targetWeights(doc, ex, addDays(weekStart(localToday(tz)), 7)) } };
+      return { write: true, result: { exercise: ex.name, group: ex.group, step: num(ex.step) || 10, rule: ex.rule || 'reps15', toFailure: toFailure(ex), nextWeek: isBodyweight(ex) ? null : targetWeights(doc, ex, addDays(weekStart(localToday(tz)), 7)) } };
     }
     case 'set_training_day': {
       const k = resolveDate(a.date, tz);
