@@ -681,8 +681,14 @@ function liftsTable(k, group) {
       }
       if (ui.logEx === ex.id) {
         if (!ui.logSets) ui.logSets = day ? day.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
-        const cells = ui.logSets.map((x, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(x.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
-        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex">${cells}<button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div></td></tr>`;
+        const sets = ui.logSets;
+        const heads = sets.map((_, i) => `<th>Set ${i + 1}</th>`).join('');
+        const wRow = sets.map((x, i) => `<td><input class="inp num" id="w${i}" value="${esc(x.w)}" inputmode="decimal" aria-label="Set ${i + 1} weight in lb"></td>`).join('');
+        const rRow = sets.map((x, i) => `<td><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="—" inputmode="numeric" aria-label="Set ${i + 1} reps"></td>`).join('');
+        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="liftedit">
+          <table class="setgrid"><tr><th></th>${heads}</tr><tr><th>Weight (lb)</th>${wRow}</tr><tr><th>Reps</th>${rRow}</tr></table>
+          <div class="row-flex"><button class="btn sm" data-a="liftSet" data-d="1">${ic('plus', 12, 2.2)} Set</button>${sets.length > 1 ? '<button class="btn ghost sm" data-a="liftSet" data-d="-1">− Set</button>' : ''}<span style="flex:1"></span><button class="btn ghost sm" data-a="logEx" data-id="${ex.id}">Cancel</button><button class="btn primary sm" data-a="saveEx" data-id="${ex.id}">Save</button></div>
+        </div></td></tr>`;
       }
       return row;
     }).join('');
@@ -935,6 +941,12 @@ const A = {
     save(); render();
   },
   logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; ui.ruleEx = null; render(); },
+  liftSet: (el) => {
+    const sets = ui.logSets; if (!sets) return;
+    readLogSets(sets);
+    if (+el.dataset.d > 0) { const last = sets[sets.length - 1] || { w: 0, r: '' }; sets.push({ w: last.w, r: '' }); } else if (sets.length > 1) sets.pop();
+    render();
+  },
   exRuleOpen: (el) => { ui.ruleEx = ui.ruleEx === el.dataset.id ? null : el.dataset.id; ui.logEx = null; render(); },
   exRuleSave: (el) => {
     const ex = DB.exercises.find((e) => e.id === el.dataset.id); if (!ex) return;
