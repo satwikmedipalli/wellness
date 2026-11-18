@@ -214,7 +214,7 @@ function showSyncStatus() {
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
   week: weekStart(todayKey()), month: monthKey(todayKey()), hDate: todayKey(), sMonth: monthKey(todayKey()),
-  logEx: null, logSets: null, ab: null, lastCard: undefined
+  logEx: null, logSets: null, ruleEx: null, ab: null, lastCard: undefined
 };
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
@@ -554,11 +554,17 @@ function targetWeights(ex, k) {
   }
   const ws = weekStart(k);
   const prev = DB.sessions.filter((s) => s.exId === ex.id && s.date < ws).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
-  if (!prev) return { w: ex.start.slice(), why: 'starting weights' };
+  if (!prev) return { w: (ex.start || []).slice(), why: 'starting weights' };
   const w = prev.sets.map((s) => num(s.w));
-  if (num(prev.sets[0].r) >= 15) return { w: w.map((x) => x + 10), why: `${prev.sets[0].r} reps on set 1 last time → +10 lb` };
+  const step = exStep(ex), rule = ex.rule || 'reps15';
+  if (rule === 'manual') return { w, why: 'you raise this one yourself' };
+  if (rule === 'try') return { w: w.map((x) => x + step), why: `try +${step} lb; if you can’t get 1 rep, stay at last week’s` };
+  if (num(prev.sets[0].r) >= 15) return { w: w.map((x) => x + step), why: `${prev.sets[0].r} reps on set 1 last week → +${step} lb` };
   return { w, why: 'same as last week' };
 }
+// How each lift progresses: step = lb added to every set when it moves up; rule = when it moves up.
+const RULES = { reps15: '15 reps on set 1 → up a step', try: 'Try a step heavier each week', manual: 'I raise it myself' };
+const exStep = (ex) => num(ex.step) || 10;
 // ---------- ab circuit ----------
 // The Abs exercises are done as one circuit: every move back to back, then rest. Each round is one set
 // in each exercise's session for that day; the grid below shows moves as rows and rounds as columns.
@@ -664,8 +670,15 @@ function liftsTable(k, group) {
       const day = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
       let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
         <td class="mono">${day ? day.sets.map((x) => setText(x, false)).join(' / ') : '<span class="faint">—</span>'}</td>
-        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span></td>
+        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span>
+          <button class="rulechip" data-a="exRuleOpen" data-id="${ex.id}" aria-expanded="${ui.ruleEx === ex.id}" title="How this lift moves up">${ex.rule === 'manual' ? 'manual' : `+${exStep(ex)} lb${ex.rule === 'try' ? ' · try' : ''}`}</button></td>
         <td class="c"><button class="btn sm ${day ? '' : 'primary'}" data-a="logEx" data-id="${ex.id}">${day ? 'Edit' : 'Log'}</button></td></tr>`;
+      if (ui.ruleEx === ex.id) {
+        row += `<tr class="chiprow"><td class="g"></td><td colspan="4"><div class="row-flex ruleedit">
+          <span class="small muted">${esc(ex.name)} moves up by</span><input class="inp num" id="ruleStep" value="${exStep(ex)}" aria-label="Step in lb"><span class="faint">lb per set, when</span>
+          <select class="sel" id="ruleKind" aria-label="Rule">${Object.entries(RULES).map(([r, l]) => `<option value="${r}" ${r === (ex.rule || 'reps15') ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <button class="btn primary sm" data-a="exRuleSave" data-id="${ex.id}">Save</button><button class="btn ghost sm" data-a="exRuleOpen" data-id="${ex.id}">Cancel</button></div></td></tr>`;
+      }
       if (ui.logEx === ex.id) {
         if (!ui.logSets) ui.logSets = day ? day.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
         const cells = ui.logSets.map((x, i) => `<span class="small muted">Set ${i + 1}</span><input class="inp num" id="w${i}" value="${esc(x.w)}" aria-label="Set ${i + 1} weight"><span class="faint">lb ×</span><input class="inp num" id="r${i}" value="${esc(x.r)}" placeholder="reps" aria-label="Set ${i + 1} reps">`).join('');
@@ -693,7 +706,7 @@ function workoutsSection(k) {
   else if (tr.type === 'Abs') body = abCircuit(k);
   else if (tr.type) body = liftsTable(k, tr.type);
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
-  return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Weights: 15 reps on set 1 moves every set up 10 lb next week. Ab circuit: add a round when every round feels solid.</span></div>
+  return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Ab circuit: add a round when every round feels solid.</span></div>
   ${seg}${body}</div>`;
 }
 
@@ -921,7 +934,13 @@ const A = {
     DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)], ...(body ? { pos: abMoves().length } : {}) });
     save(); render();
   },
-  logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; render(); },
+  logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; ui.ruleEx = null; render(); },
+  exRuleOpen: (el) => { ui.ruleEx = ui.ruleEx === el.dataset.id ? null : el.dataset.id; ui.logEx = null; render(); },
+  exRuleSave: (el) => {
+    const ex = DB.exercises.find((e) => e.id === el.dataset.id); if (!ex) return;
+    ex.step = num($('#ruleStep').value) || 10; ex.rule = $('#ruleKind').value;
+    ui.ruleEx = null; save(); render(); toast('Saved how ' + ex.name + ' moves up');
+  },
   setTrain: (el) => {
     const k = ui.hDate, t = el.dataset.t;
     DB.training = DB.training || {};

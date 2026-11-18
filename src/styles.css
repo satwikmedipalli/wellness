@@ -204,3 +204,8 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .restcard .ttl{font-family:var(--serif);font-size:22px;font-weight:600}
 .seg.daytype button.on{background:var(--acc);color:var(--onAcc)}
 .circuit .hist .chip.on{background:var(--soft2);color:var(--deep);border-color:var(--soft2)}
+.rulechip{display:inline-block;margin-top:4px;height:20px;padding:0 8px;border:1px solid var(--line2);border-radius:999px;background:var(--card);color:var(--ink2);font-size:11px;font-family:var(--mono);cursor:pointer}
+.rulechip:hover,.rulechip[aria-expanded="true"]{border-color:var(--acc);color:var(--accT)}
+.ruleedit{flex-wrap:wrap;align-items:center}
+.ruleedit .inp.num{width:72px;flex:none}
+.chiprow .ruleedit select.sel{width:auto;max-width:280px;flex:none}
