@@ -83,6 +83,7 @@ Then, for authentication:
 | update_day | Tick blocks, pick free-time choices, add notes |
 | log_workout | Log sets (weights, or reps / seconds / per side for the ab circuit); returns the next target |
 | set_training_day | Mark a date as a split day, Ab day or Rest day |
+| set_exercise | How a lift moves up: step in lb and rule (15 reps on set 1 / try heavier / manual) |
 | remove_entries | Delete food or expense entries |
 
 ## Updating the server later

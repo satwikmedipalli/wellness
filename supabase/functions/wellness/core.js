@@ -113,8 +113,18 @@ function targetWeights(doc, ex, k) {
   const prev = doc.sessions.filter((s) => s.exId === ex.id && s.date < ws).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
   if (!prev) return { weights: ex.start || [], reason: 'starting weights' };
   const w = prev.sets.map((s) => num(s.w));
-  if (num(prev.sets[0] && prev.sets[0].r) >= 15) return { weights: w.map((x) => x + 10), reason: `${prev.sets[0].r} reps on set 1 last week, so +10 lb` };
+  const step = num(ex.step) || 10, rule = ex.rule || 'reps15';
+  if (rule === 'manual') return { weights: w, reason: 'the user raises this one themselves' };
+  if (rule === 'try') return { weights: w.map((x) => x + step), reason: `try +${step} lb; if not even 1 rep is possible, stay at last week’s weights` };
+  if (num(prev.sets[0] && prev.sets[0].r) >= 15) return { weights: w.map((x) => x + step), reason: `${prev.sets[0].r} reps on set 1 last week, so +${step} lb` };
   return { weights: w, reason: 'same as last week' };
+}
+// How a lift progresses. step: lb added to every set when it moves up (default 10).
+// rule: reps15 = when set 1 hit 15 reps the week before; try = try a step heavier every week; manual = the user decides.
+const RULE_NAMES = ['reps15', 'try', 'manual'];
+function setProgression(ex, a) {
+  if (a.step != null) { const st = num(a.step); if (!(st > 0)) throw new Error('step must be a positive number of lb'); ex.step = st; }
+  if (a.rule != null) { if (!RULE_NAMES.includes(a.rule)) throw new Error(`rule must be one of ${RULE_NAMES.join(', ')}`); ex.rule = a.rule; }
 }
 
 // What kind of training day it is: a split day, Abs or Rest. Set explicitly, or read off what was logged.
@@ -289,10 +299,17 @@ const TOOLS = [
         kind: { type: 'string', enum: ['weights', 'bodyweight'], description: 'For a new exercise. Defaults to bodyweight for Abs, weights otherwise.' },
         sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number', description: 'lb; leave out or 0 for bodyweight' }, reps: { type: 'number' }, seconds: { type: 'number', description: 'For timed holds, e.g. 30 for a 30-second plank' }, per_side: { type: 'boolean', description: 'Reps are per side (e.g. Russian twists 50 each side)' } } } },
         note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' },
-        position: { type: 'number', description: 'Bodyweight only: this move’s place in the ab circuit, 1 = first. Other moves shift to make room.' }
+        position: { type: 'number', description: 'Bodyweight only: this move’s place in the ab circuit, 1 = first. Other moves shift to make room.' },
+        step: { type: 'number', description: 'Weighted only: lb added to every set when the lift moves up (default 10). Saved on the exercise.' },
+        rule: { type: 'string', enum: ['reps15', 'try', 'manual'], description: 'Weighted only: reps15 = up a step when set 1 hit 15 reps (default); try = try a step heavier every week, stay if not even 1 rep; manual = the user raises it. Saved on the exercise.' }
       },
       required: ['exercise', 'sets']
     }
+  },
+  {
+    name: 'set_exercise',
+    description: 'Change how a weighted lift progresses without logging a session: step (lb added to every set when it moves up) and rule (reps15, try or manual). Also renames or moves it to another split day.',
+    inputSchema: { type: 'object', properties: { exercise: { type: 'string' }, step: { type: 'number' }, rule: { type: 'string', enum: ['reps15', 'try', 'manual'] }, group: { type: 'string' }, rename: { type: 'string' } }, required: ['exercise'] }
   },
   {
     name: 'set_training_day',
@@ -325,7 +342,7 @@ function runTool(name, args, doc, tz) {
         choiceLists: doc.choiceLists.map((l) => ({ name: l.name, options: l.options, noRepeatInOneDay: !!l.distinct })),
         categories: doc.categories, cards: doc.cards,
         foodLibrary: doc.foodLibrary.map((f) => `${f.name} (${f.serving}: ${f.cal} cal, ${f.p} P, ${f.c} C, ${f.fib} fib, ${f.f} F)`),
-        exercises: doc.exercises.map((e) => `${e.name} (${e.group}${isBodyweight(e) ? ', bodyweight' : ''})`),
+        exercises: doc.exercises.map((e) => `${e.name} (${e.group}${isBodyweight(e) ? ', bodyweight' : `, +${num(e.step) || 10} lb step, rule ${e.rule || 'reps15'}`})`),
         goals: { proteinG: S.proteinTarget, fiberG: S.fiberTarget }
       }
     };
@@ -450,6 +467,7 @@ function runTool(name, args, doc, tz) {
         doc.exercises.push(ex);
       }
       const body = isBodyweight(ex);
+      if (!body) setProgression(ex, a);
       if (body && a.position != null) {
         const moves = doc.exercises.map((e, i) => ({ e, i })).filter((x) => isBodyweight(x.e)).sort((x, y) => (x.e.pos ?? x.i) - (y.e.pos ?? y.i)).map((x) => x.e).filter((e) => e !== ex);
         moves.splice(Math.max(0, Math.min(moves.length, Math.round(num(a.position)) - 1)), 0, ex);
@@ -464,6 +482,15 @@ function runTool(name, args, doc, tz) {
       doc.sessions.push(session);
       const next = body ? { rounds: sets.length, reason: `${sets.length} rounds today. Add a round once every round is done with good form` } : targetWeights(doc, ex, addDays(weekStart(k), 7));
       return { write: true, result: { exercise: ex.name, kind: body ? 'bodyweight' : 'weights', date: k, sets: sets.map((s) => setText(s, body)), ...(session.note ? { note: session.note } : {}), [body ? 'next' : 'nextWeek']: next } };
+    }
+    case 'set_exercise': {
+      const ex = doc.exercises.find((e) => norm(e.name) === norm(a.exercise)) || doc.exercises.find((e) => norm(e.name).includes(norm(a.exercise)));
+      if (!ex) throw new Error(`No exercise called "${a.exercise}". Exercises: ${doc.exercises.map((e) => e.name).join(', ')}.`);
+      if (isBodyweight(ex) && (a.step != null || a.rule != null)) throw new Error(`${ex.name} is part of the ab circuit; it progresses by rounds.`);
+      setProgression(ex, a);
+      if (a.group) ex.group = a.group;
+      if (a.rename) ex.name = a.rename;
+      return { write: true, result: { exercise: ex.name, group: ex.group, step: num(ex.step) || 10, rule: ex.rule || 'reps15', nextWeek: isBodyweight(ex) ? null : targetWeights(doc, ex, addDays(weekStart(localToday(tz)), 7)) } };
     }
     case 'set_training_day': {
       const k = resolveDate(a.date, tz);
