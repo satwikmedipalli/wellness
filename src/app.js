@@ -583,7 +583,7 @@ function abDates() {
 function circuitOn(date) {
   const rows = abMoves().map((ex) => ({ ex, unit: abUnit(ex), s: DB.sessions.find((x) => x.exId === ex.id && x.date === date) }));
   const done = rows.filter((r) => r.s);
-  return { date, rows, rounds: Math.max(0, ...done.map((r) => r.s.sets.length)), note: (done.find((r) => r.s.note) || { s: {} }).s.note || '' };
+  return { date, rows, rounds: Math.max(0, ...done.map((r) => r.s.sets.length)), note: (done.find((r) => r.s.note) || { s: {} }).s.note || '', effort: (done.find((r) => r.s.effort) || { s: {} }).s.effort || 'hard' };
 }
 const setVal = (x, unit) => (unit === 'sec' ? x.t || '' : x.r ?? '');
 const fmtSecs = (n) => (n >= 60 ? `${Math.floor(n / 60)}:${pad(Math.round(n % 60))}` : `${n} s`);
@@ -609,6 +609,7 @@ function abCircuit(k) {
       <span class="ttl">Ab circuit</span>
       <span class="pill">${esc(dayLabel)}</span>
       ${rounds ? `<span class="pill mono">${rounds} round${rounds === 1 ? '' : 's'}</span>` : E ? '' : '<span class="pill faint">Not logged</span>'}
+      ${!E && logged ? `<span class="pill">${c.effort[0].toUpperCase() + c.effort.slice(1)}</span>` : ''}
       ${!E && c.note ? `<span class="pill">${esc(c.note)}</span>` : ''}
       <span class="next">${nextRounds ? `Next time <b>${nextRounds + 1}</b> rounds, once all ${nextRounds} feel solid` : 'Progress by adding a round'}</span>
       ${E ? '' : `<button class="btn ${logged ? '' : 'primary'} sm" data-a="abEdit">${logged ? 'Edit' : 'Log circuit'}</button>`}
@@ -640,6 +641,7 @@ function abCircuit(k) {
   }
   const foot = E
     ? `<div class="addbar"><button class="btn sm" data-a="abRound" data-d="1">${ic('plus', 12, 2.2)} Round</button><button class="btn ghost sm" data-a="abRound" data-d="-1" ${E.rounds > 1 ? '' : 'disabled'}>− Round</button>
+        <label class="fld">How hard was it?<select class="sel" data-c="abEffort" aria-label="How hard the circuit felt">${['hard', 'moderate', 'easy'].map((e) => `<option value="${e}" ${E.effort === e ? 'selected' : ''}>${e[0].toUpperCase() + e.slice(1)}</option>`).join('')}</select></label>
         <label class="fld" style="flex:1;min-width:220px">Note<input class="inp" value="${esc(E.note)}" data-i="abNote" placeholder="e.g. 5 min rest between rounds"></label>
         <button class="btn ghost" data-a="abCancel">Cancel</button><button class="btn primary" data-a="abSave">Save circuit</button></div>`
     : dates.length ? `<div class="hist"><span class="small muted">Recent</span>${dates.slice(0, 8).map((d) => `<button class="chip ${d === k ? 'on' : ''}" data-a="hGo" data-k="${d}">${shortDay(d)} · <span class="mono">${circuitOn(d).rounds}</span></button>`).join('')}</div>` : '';
@@ -707,22 +709,27 @@ function liftsTable(k, group) {
 }
 // Estimated calories a workout burns, on top of the resting day. Sets are taken to failure unless marked otherwise:
 // - lifts: vigorous weight training, MET 6 (MET 3.5 for sets not to failure), about 3 min per set including rest;
-// - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
+// - ab circuit: calisthenics at the effort logged for it (hard MET 8, moderate 3.8, easy 2.8), timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
 // kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
 // Every lift is taken to failure except the ones marked otherwise; traps (shrugs) and wrist curls default to not.
 const toFailure = (ex) => (ex.failure != null ? !!ex.failure : !/trap|shrug|wrist curl/i.test(ex.name || ''));
+const AB_MET = { hard: 8, moderate: 3.8, easy: 2.8 }; // how hard the ab circuit felt → MET for the calorie estimate
 function workoutBurn(k) {
   const kg = num(DB.settings.bodyKg) || 68;
-  let liftSets = 0, easySets = 0, abSecs = 0;
+  let liftSets = 0, easySets = 0, abSecs = 0, abKcal = 0;
   DB.sessions.filter((s) => s.date === k).forEach((s) => {
     const ex = DB.exercises.find((e) => e.id === s.exId);
     if (!ex) return;
-    if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
+    if (isBodyweight(ex)) {
+      let secs = 0;
+      s.sets.forEach((x) => { secs += x.t ? num(x.t) : num(x.r) * 2; });
+      abSecs += secs; abKcal += ((AB_MET[s.effort] || AB_MET.hard) - 1) * kg * (secs / 3600);
+    }
     else if (toFailure(ex)) liftSets += s.sets.length;
     else easySets += s.sets.length;
   });
   const abMin = abSecs / 60;
-  const kcal = Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + 7 * kg * (abMin / 60));
+  const kcal = Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + abKcal);
   return { kcal, liftSets, easySets, abMin: Math.round(abMin), mins: Math.round((liftSets + easySets) * 3 + abMin) };
 }
 function workoutsSection(k) {
@@ -995,7 +1002,7 @@ const A = {
       const sets = row && row.s ? row.s.sets : [];
       vals[ex.id] = Array.from({ length: rounds }, (_, i) => (sets[i] ? String(setVal(sets[i], units[ex.id])) : sets.length ? String(setVal(sets[sets.length - 1], units[ex.id])) : ''));
     });
-    ui.ab = { date: k, rounds, vals, units, note: c ? c.note : '' };
+    ui.ab = { date: k, rounds, vals, units, note: c ? c.note : '', effort: c && c.rounds && c.date === k ? c.effort : 'hard' };
     render();
   },
   abRound: (el) => {
@@ -1026,6 +1033,7 @@ const A = {
       if (!sets.length) return;
       const ses = { ...(prior || {}), id: prior ? prior.id : uid(), exId: ex.id, date: E.date, sets };
       if (E.note.trim()) ses.note = E.note.trim(); else delete ses.note;
+      ses.effort = E.effort || 'hard';
       DB.sessions.push(ses);
       logged++;
     });
@@ -1067,6 +1075,7 @@ const A = {
 };
 
 const C = {
+  abEffort: (el) => { if (ui.ab) ui.ab.effort = el.value; },
   abUnit: (el) => { if (ui.ab) { ui.ab.units[el.dataset.id] = el.value; render(); } },
   exGroup: (el) => { const w = $('#exWts'); if (w) w.style.display = el.value === 'Abs' ? 'none' : ''; },
   blk: (el) => {

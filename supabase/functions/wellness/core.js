@@ -138,21 +138,27 @@ function trainingOn(doc, k) {
 }
 // Estimated calories a workout burns, on top of the resting day. Sets are taken to failure unless marked otherwise:
 // - lifts: vigorous weight training, MET 6 (MET 3.5 for sets not to failure), about 3 min per set including rest;
-// - ab circuit: vigorous calisthenics, MET 8, timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
+// - ab circuit: calisthenics at the effort logged for it (hard MET 8, moderate 3.8, easy 2.8), timed from the work (about 2 s a rep; reps per side are quick touches, about 1 s each; plus held seconds).
 // kcal = (MET − 1) × body kg × hours; the 1 MET of rest is already in the day's baseline.
 // Every lift is taken to failure except the ones marked otherwise; traps (shrugs) and wrist curls default to not.
 const toFailure = (ex) => (ex.failure != null ? !!ex.failure : !/trap|shrug|wrist curl/i.test(ex.name || ''));
+const AB_MET = { hard: 8, moderate: 3.8, easy: 2.8 }; // how hard the ab circuit felt → MET for the calorie estimate
 function workoutBurn(doc, k) {
   const kg = num(doc.settings && doc.settings.bodyKg) || 68;
-  let liftSets = 0, easySets = 0, abSecs = 0;
+  let liftSets = 0, easySets = 0, abSecs = 0, abKcal = 0, effort = null;
   doc.sessions.filter((s) => s.date === k).forEach((s) => {
     const ex = doc.exercises.find((e) => e.id === s.exId);
     if (!ex) return;
-    if (isBodyweight(ex)) s.sets.forEach((x) => { abSecs += x.t ? num(x.t) : num(x.r) * 2; });
+    if (isBodyweight(ex)) {
+      let secs = 0;
+      s.sets.forEach((x) => { secs += x.t ? num(x.t) : num(x.r) * 2; });
+      abSecs += secs; effort = effort || s.effort || 'hard';
+      abKcal += ((AB_MET[s.effort] || AB_MET.hard) - 1) * kg * (secs / 3600);
+    }
     else if (toFailure(ex)) liftSets += s.sets.length;
     else easySets += s.sets.length;
   });
-  return { kcal: Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + 7 * kg * (abSecs / 3600)), setsToFailure: liftSets, setsNotToFailure: easySets, circuitMinutes: Math.round(abSecs / 60), method: 'estimate: lifts MET 6 to failure / 3.5 not, ~3 min per set; ab circuit MET 8 for work time' };
+  return { kcal: Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + abKcal), setsToFailure: liftSets, setsNotToFailure: easySets, circuitMinutes: Math.round(abSecs / 60), ...(effort ? { circuitEffort: effort } : {}), method: 'estimate: lifts MET 6 to failure / 3.5 not, ~3 min per set; ab circuit MET 8 hard / 3.8 moderate / 2.8 easy for work time' };
 }
 function describeDay(doc, k) {
   const day = doc.days[k];
@@ -319,6 +325,7 @@ const TOOLS = [
         sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number', description: 'lb; leave out or 0 for bodyweight' }, reps: { type: 'number' }, seconds: { type: 'number', description: 'For timed holds, e.g. 30 for a 30-second plank' }, per_side: { type: 'boolean', description: 'Reps are per side (e.g. Russian twists 50 each side)' } } } },
         note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' },
         position: { type: 'number', description: 'Bodyweight only: this move’s place in the ab circuit, 1 = first. Other moves shift to make room.' },
+        effort: { type: 'string', enum: ['hard', 'moderate', 'easy'], description: 'Bodyweight only: how hard the circuit felt; sets the calorie estimate (default hard). Ask the user after each ab session.' },
         step: { type: 'number', description: 'Weighted only: lb added to every set when the lift moves up (default 10). Saved on the exercise.' },
         rule: { type: 'string', enum: ['reps15', 'try', 'manual'], description: 'Weighted only: reps15 = up a step when set 1 hit 15 reps (default); try = try a step heavier every week, stay if not even 1 rep; manual = the user raises it. Saved on the exercise.' }
       },
@@ -497,6 +504,7 @@ function runTool(name, args, doc, tz) {
       doc.sessions = doc.sessions.filter((s) => !(s.exId === ex.id && s.date === k));
       const session = { id: prior ? prior.id : uid(), exId: ex.id, date: k, sets };
       const note = a.note != null ? String(a.note) : prior && prior.note;
+      if (body) { const eff = a.effort || (prior && prior.effort); if (eff) { if (!AB_MET[eff]) throw new Error('effort must be hard, moderate or easy'); session.effort = eff; } }
       if (note) session.note = note;
       doc.sessions.push(session);
       const next = body ? { rounds: sets.length, reason: `${sets.length} rounds today. Add a round once every round is done with good form` } : targetWeights(doc, ex, addDays(weekStart(k), 7));
