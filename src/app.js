@@ -293,33 +293,63 @@ function render() {
     if (window.api.updateInfo) window.api.updateInfo().then((i) => { const r = $('#updRepo'), v = $('#updVer'); if (r) r.value = i.configured ? i.repo : ''; if (v) v.textContent = 'version ' + i.version; const t = $('#updToken'); if (t && i.hasToken) t.placeholder = 'saved ••••••'; });
   }
 }
-const go = (v) => { ui.view = v; ui.open = null; render(); $('#main').scrollTop = 0; };
+const go = (v) => { if (ui.view === 'plans' || ui.editDay) { pruneAll(); save(); } ui.view = v; ui.open = null; render(); $('#main').scrollTop = 0; };
 
 function dateNav(action, label) {
   return `<div class="datenav"><button class="icon-btn" data-a="${action}" data-d="-1" aria-label="Previous">${ic('left')}</button><button class="btn sm" data-a="${action}" data-d="0">${label}</button><button class="icon-btn" data-a="${action}" data-d="1" aria-label="Next">${ic('right')}</button></div>`;
 }
 
 // ---------- block editor (plans + single day) ----------
+// Read a typed time: "9", "930", "9:30", "9.30", "4pm", "4 p", "16:00". Returns "HH:MM", "" for empty, or null if unreadable.
+// Without am/pm, 1–5 is read as PM and 6–11 as AM (a day plan rarely has 2 AM in it); 12 is noon.
+function parseTimeInput(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!s) return '';
+  const m = /^(\d{1,2})(?:[:.\s]?(\d{2}))?\s*(a|am|a\.m\.|p|pm|p\.m\.)?$/.exec(s);
+  if (!m) return null;
+  let h = +m[1]; const mi = +(m[2] || 0);
+  const ap = m[3] ? m[3][0] : '';
+  if (mi > 59) return null;
+  if (ap) { if (h < 1 || h > 12) return null; if (ap === 'p' && h < 12) h += 12; if (ap === 'a' && h === 12) h = 0; }
+  else if (m[1].length === 2 && m[1][0] === '0') { /* 08:00 → 8 AM as written */ }
+  else if (h >= 1 && h <= 5) h += 12;
+  if (h > 23) return null;
+  return pad(h) + ':' + pad(mi);
+}
+// Drop blocks with no title (left behind by half-finished edits) and end times equal to the start.
+function pruneBlocks(blocks, done) {
+  if (!blocks) return blocks;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.end && b.end === b.start) b.end = '';
+    if (!String(b.title || '').trim() && !(done && done[b.id])) blocks.splice(i, 1);
+  }
+  return blocks;
+}
+function pruneAll() {
+  DB.plans.forEach((p) => pruneBlocks(p.blocks));
+  Object.values(DB.days).forEach((d) => pruneBlocks(d.blocks, d.done));
+}
 function blockEditor(scope, blocks) {
   const listOpts = (sel) => DB.choiceLists.map((l) => `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
   const rows = blocks.map((b, i) => `
     <tr>
       <td class="g">${i + 1}</td>
-      <td><input class="inp time" type="time" value="${esc(b.start)}" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="start" aria-label="Start time"></td>
-      <td><input class="inp time" type="time" value="${esc(b.end)}" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="end" aria-label="End time"></td>
+      <td><input class="inp time" type="text" autocomplete="off" spellcheck="false" value="${esc(fmtTime(b.start))}" placeholder="any time" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="start" aria-label="Start time"></td>
+      <td><input class="inp time" type="text" autocomplete="off" spellcheck="false" value="${esc(fmtTime(b.end))}" placeholder="—" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="end" aria-label="End time"></td>
       <td><input class="inp" value="${esc(b.title)}" placeholder="What happens" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="title" aria-label="Task"></td>
       <td><select class="sel" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="kind" aria-label="Type"><option value="task" ${b.kind !== 'choice' ? 'selected' : ''}>Task</option><option value="choice" ${b.kind === 'choice' ? 'selected' : ''}>Choice</option></select></td>
       <td>${b.kind === 'choice' ? `<select class="sel" data-c="blk" data-s="${scope}" data-b="${b.id}" data-f="listId" aria-label="Choice list">${listOpts(b.listId)}</select>` : '<span class="faint">—</span>'}</td>
       <td class="c"><button class="chk ${b.alert ? 'on' : ''}" data-a="blkAlert" data-s="${scope}" data-b="${b.id}" aria-pressed="${b.alert ? 'true' : 'false'}" aria-label="Alert for ${esc(b.title || 'block')}"><span class="box">${b.alert ? ic('check', 13, 3.2) : ''}</span></button></td>
       <td class="c"><button class="icon-btn" data-a="blkDel" data-s="${scope}" data-b="${b.id}" aria-label="Remove ${esc(b.title || 'block')}">${ic('x', 14)}</button></td>
     </tr>`).join('');
-  return `<div class="sheet"><table>
+  return `<div class="sheet blk-editor" data-s="${scope}"><table>
     <colgroup><col style="width:40px"><col style="width:140px"><col style="width:140px"><col><col style="width:110px"><col style="width:160px"><col style="width:64px"><col style="width:56px"></colgroup>
     <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td>E</td><td>F</td><td></td></tr>
     <tr><th class="g">#</th><th>Start</th><th>End</th><th>Task</th><th>Type</th><th>Choice list</th><th class="c">Alert</th><th></th></tr>
     ${rows || `<tr><td class="g">1</td><td colspan="7" class="faint">No blocks yet. Add your first one below.</td></tr>`}
   </table>
-  <div class="addbar"><button class="btn" data-a="blkAdd" data-s="${scope}">${ic('plus', 14, 2.2)} Add block</button><span class="hint">Leave start empty for “any time” tasks. Alerts fire on your Mac when a block starts.</span></div></div>`;
+  <div class="addbar"><button class="btn" data-a="blkAdd" data-s="${scope}">${ic('plus', 14, 2.2)} Add block</button><span class="hint">Type times like 9, 930, 4pm or 16:00 (1–5 means PM, 6–11 AM, unless you add am/pm). Leave start empty for “any time”. Alerts fire on your Mac when a block starts.</span></div></div>`;
 }
 function scopeBlocks(scope) {
   if (scope === 'day') return DB.days[ui.date].blocks;
@@ -934,7 +964,7 @@ const A = {
   pick: (el) => { const d = DB.days[ui.date]; if (el.dataset.o) d.choices[el.dataset.b] = el.dataset.o; else delete d.choices[el.dataset.b]; ui.open = null; save(); render(); },
   applyHere: () => { const id = $('#applySel').value; if (applyPlan(ui.date, id)) render(); },
   blankDay: () => { DB.days[ui.date] = { planId: null, planName: 'Custom day', color: '#7C8B4E', blocks: [], done: {}, choices: {}, notes: '' }; ui.editDay = true; save(); render(); },
-  editDay: () => { ui.editDay = !ui.editDay; if (!ui.editDay) sortBlocks(DB.days[ui.date].blocks); save(); render(); },
+  editDay: () => { ui.editDay = !ui.editDay; if (!ui.editDay) { pruneBlocks(DB.days[ui.date].blocks, DB.days[ui.date].done); sortBlocks(DB.days[ui.date].blocks); } save(); render(); },
   clearDay: () => { if (confirm(`Remove the plan from ${shortDay(ui.date)}? Ticks and picks for that day are deleted.`)) { delete DB.days[ui.date]; ui.editDay = false; save(); render(); } },
   newPlan: () => {
     const p = { id: uid(), name: 'New plan', color: PLAN_COLORS[DB.plans.length % PLAN_COLORS.length], blocks: [] };
@@ -1085,11 +1115,22 @@ const C = {
   exGroup: (el) => { const w = $('#exWts'); if (w) w.style.display = el.value === 'Abs' ? 'none' : ''; },
   blk: (el) => {
     const b = scopeBlocks(el.dataset.s).find((x) => x.id === el.dataset.b);
-    b[el.dataset.f] = el.value;
-    if (el.dataset.f === 'kind' && el.value === 'choice' && !b.listId && DB.choiceLists[0]) b.listId = DB.choiceLists[0].id;
-    if (el.dataset.f === 'start' || el.dataset.f === 'end') sortBlocks(scopeBlocks(el.dataset.s));
+    if (!b) return;
+    const f = el.dataset.f;
+    if (f === 'start' || f === 'end') {
+      // Read the whole typed time when the box loses focus; never redraw mid-typing.
+      const hm = parseTimeInput(el.value);
+      if (hm === null) { toast(`Couldn’t read “${el.value}”. Try 9, 930, 4pm or 16:00`); el.value = fmtTime(b[f]); return; }
+      b[f] = hm;
+      el.value = fmtTime(hm);
+      ui.blkResort = el.dataset.s;
+      save();
+      return;
+    }
+    b[f] = el.value;
+    if (f === 'kind' && el.value === 'choice' && !b.listId && DB.choiceLists[0]) b.listId = DB.choiceLists[0].id;
     save();
-    if (el.dataset.f !== 'title') render();
+    if (f !== 'title') render();
   },
   notes: (el) => { DB.days[ui.date].notes = el.value; save(); },
   planName: (el) => { planById(ui.planId).name = el.value.trim() || 'Untitled plan'; save(); render(); },
@@ -1138,6 +1179,19 @@ document.addEventListener('click', (e) => {
   const fn = A[el.dataset.a];
   if (fn) { e.preventDefault(); fn(el); }
 });
+// Clicking into a time box selects what's there, so typing replaces it.
+let timeJustFocused = null;
+document.addEventListener('focusin', (e) => { if (e.target.matches && e.target.matches('.blk-editor .inp.time')) { timeJustFocused = e.target; e.target.select(); } });
+document.addEventListener('mouseup', (e) => { if (timeJustFocused && e.target === timeJustFocused) { e.preventDefault(); timeJustFocused.select(); } timeJustFocused = null; });
+// Re-sort blocks by time only once focus leaves the block editor, so typing is never interrupted.
+document.addEventListener('focusout', (e) => {
+  const ed = e.target.closest && e.target.closest('.blk-editor');
+  if (!ed) return;
+  setTimeout(() => {
+    if (ed.contains(document.activeElement)) return;
+    if (ui.blkResort) { const bl = scopeBlocks(ui.blkResort); ui.blkResort = null; if (bl) { sortBlocks(bl); save(); render(); } }
+  }, 120);
+});
 document.addEventListener('change', (e) => { const el = e.target.closest('[data-c]'); if (el && C[el.dataset.c]) C[el.dataset.c](el); });
 document.addEventListener('input', (e) => { const el = e.target.closest('[data-i]'); if (el && I[el.dataset.i]) I[el.dataset.i](el); });
 document.addEventListener('keydown', (e) => {
@@ -1165,6 +1219,9 @@ if (window.api && window.api.onUpdateReady) window.api.onUpdateReady((r) => {
 (async function init() {
   const saved = await store.load();
   DB = saved ? Object.assign(defaults(), saved) : defaults();
+  const before = JSON.stringify(DB);
+  pruneAll();
+  if (saved && JSON.stringify(DB) !== before) save();
   if (!saved) save();
   render();
   Sync.pull();
