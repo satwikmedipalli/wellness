@@ -128,12 +128,14 @@ function setProgression(ex, a) {
 }
 
 // What kind of training day it is: a split day, Abs or Rest. Set explicitly, or read off what was logged.
-const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs', 'Rest'];
+// 5 workout days: Shoulders & Chest, Arms, Back & Abs (Back lifts + the ab circuit), Legs, Abs.
+const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back & Abs', 'Legs', 'Abs', 'Rest'];
 function trainingOn(doc, k) {
-  if (doc.training && doc.training[k]) return doc.training[k];
+  if (doc.training && doc.training[k]) return doc.training[k] === 'Back' ? 'Back & Abs' : doc.training[k];
   const ex = doc.sessions.filter((s) => s.date === k).map((s) => doc.exercises.find((e) => e.id === s.exId)).filter(Boolean);
-  if (ex.some(isBodyweight)) return 'Abs';
   const lift = ex.find((e) => !isBodyweight(e));
+  if (lift && lift.group === 'Back') return 'Back & Abs';
+  if (ex.some(isBodyweight)) return 'Abs';
   return lift ? lift.group : null;
 }
 // Estimated calories a workout burns, on top of the resting day. Sets are taken to failure unless marked otherwise:
@@ -320,7 +322,7 @@ const TOOLS = [
       properties: {
         date: dateProp,
         exercise: { type: 'string' },
-        group: { type: 'string', description: 'Split day for a new exercise: Shoulders & Chest, Arms, Back, Legs, Abs' },
+        group: { type: 'string', description: 'Lift group for a new exercise: Shoulders & Chest, Arms, Back, Legs, or Abs for circuit moves (Back lifts are done on the Back & Abs day)' },
         kind: { type: 'string', enum: ['weights', 'bodyweight'], description: 'For a new exercise. Defaults to bodyweight for Abs, weights otherwise.' },
         sets: { type: 'array', minItems: 1, items: { type: 'object', properties: { weight: { type: 'number', description: 'lb; leave out or 0 for bodyweight' }, reps: { type: 'number' }, seconds: { type: 'number', description: 'For timed holds, e.g. 30 for a 30-second plank' }, per_side: { type: 'boolean', description: 'Reps are per side (e.g. Russian twists 50 each side)' } } } },
         note: { type: 'string', description: 'Optional note for this session, e.g. "circuit, 5 min rest between rounds"' },
@@ -339,7 +341,7 @@ const TOOLS = [
   },
   {
     name: 'set_training_day',
-    description: 'Say what kind of training day a date is: one of the split days (Shoulders & Chest, Arms, Back, Legs), Abs, or Rest. Shown in the Health view’s day picker. day=null clears it.',
+    description: 'Say what kind of training day a date is: one of the 5 workout days (Shoulders & Chest, Arms, Back & Abs = Back lifts plus the ab circuit, Legs, Abs) or Rest. Shown in the Health view’s day picker. day=null clears it.',
     inputSchema: { type: 'object', properties: { date: dateProp, day: { type: ['string', 'null'], enum: [...DAY_TYPES, null] } }, required: ['day'] }
   },
   {
