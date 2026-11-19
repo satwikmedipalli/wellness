@@ -650,12 +650,16 @@ function abCircuit(k) {
 
 // What kind of day it is for training: one of the split days, Abs or Rest. Set by the person;
 // until then it is read off what was logged that day.
-const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs', 'Rest'];
+// 5 workout days: Shoulders & Chest, Arms, Back & Abs (Back lifts + the ab circuit), Legs, Abs.
+const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back & Abs', 'Legs', 'Abs', 'Rest'];
+const dayGroup = (t) => (t === 'Back & Abs' ? 'Back' : t); // which lift group a day shows
 function trainingOn(k) {
-  if (DB.training && DB.training[k]) return { type: DB.training[k], set: true };
+  if (DB.training && DB.training[k]) return { type: DB.training[k] === 'Back' ? 'Back & Abs' : DB.training[k], set: true };
   const ses = DB.sessions.filter((s) => s.date === k).map((s) => DB.exercises.find((e) => e.id === s.exId)).filter(Boolean);
-  if (ses.some(isBodyweight)) return { type: 'Abs', set: false };
   const lift = ses.find((e) => !isBodyweight(e));
+  const abs = ses.some(isBodyweight);
+  if (lift && lift.group === 'Back') return { type: 'Back & Abs', set: false };
+  if (abs) return { type: 'Abs', set: false };
   return { type: lift ? lift.group : '', set: false };
 }
 function liftsTable(k, group) {
@@ -738,7 +742,8 @@ function workoutsSection(k) {
   let body;
   if (tr.type === 'Rest') body = `<div class="restcard"><span class="ttl">Rest day</span><span class="muted">Nothing to log. Recovery is part of the plan.</span></div>`;
   else if (tr.type === 'Abs') body = abCircuit(k);
-  else if (tr.type) body = liftsTable(k, tr.type);
+  else if (tr.type === 'Back & Abs') body = liftsTable(k, 'Back') + `<div style="margin-top:14px">${abCircuit(k)}</div>`;
+  else if (tr.type) body = liftsTable(k, dayGroup(tr.type));
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
   const wb = workoutBurn(k);
   const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.easySets ? `${wb.easySets} not to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
@@ -1037,7 +1042,7 @@ const A = {
       DB.sessions.push(ses);
       logged++;
     });
-    if (logged && DB.training && !DB.training[E.date]) DB.training[E.date] = 'Abs';
+    if (logged && DB.training && !DB.training[E.date]) DB.training[E.date] = trainingOn(E.date).type || 'Abs';
     ui.ab = null; save(); render(); toast(logged ? 'Circuit saved' : 'Circuit cleared');
   },
   saveEx: (el) => {
