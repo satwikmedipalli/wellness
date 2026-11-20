@@ -692,11 +692,15 @@ function trainingOn(k) {
   if (abs) return { type: 'Abs', set: false };
   return { type: lift ? lift.group : '', set: false };
 }
-function liftsTable(k, group) {
+// Weighted lifts for the day: `groups` is one split group or a list (Back & Abs → ['Back', 'Abs']).
+// Abs lifts here are the equipment ab moves (kind 'weights'); the bodyweight circuit has its own card.
+function liftsTable(k, groups) {
+  const want = [].concat(groups || []);
+  const group = want[0] || '';
   const weighted = DB.exercises.filter((ex) => !isBodyweight(ex));
   const loggedIds = new Set(DB.sessions.filter((s) => s.date === k).map((s) => s.exId));
-  const show = weighted.filter((ex) => !group || ex.group === group || loggedIds.has(ex.id));
-  const groups = [...SPLIT.filter((g) => g !== 'Abs'), ...new Set(show.map((ex) => ex.group).filter((g) => !SPLIT.includes(g)))];
+  const show = weighted.filter((ex) => !want.length || want.includes(ex.group) || loggedIds.has(ex.id));
+  groups = [...SPLIT, ...new Set(show.map((ex) => ex.group).filter((g) => !SPLIT.includes(g)))];
   const rows = groups.map((g) => {
     const list = show.filter((ex) => ex.group === g);
     if (!list.length) return '';
@@ -706,7 +710,7 @@ function liftsTable(k, group) {
       const day = DB.sessions.find((s) => s.exId === ex.id && s.date === k);
       let row = `<tr><td class="g"></td><td style="font-weight:600">${esc(ex.name)}</td>
         <td class="mono">${day ? day.sets.map((x) => setText(x, false)).join(' / ') : '<span class="faint">—</span>'}</td>
-        <td><span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span>
+        <td>${!last && !tw.w.some((x) => num(x)) ? '<span class="mono faint">—</span><span class="unit">your first session sets the starting weights</span>' : `<span class="mono" style="font-weight:600">${tw.w.join(' / ')}</span><span class="unit">${last ? `last ${shortDay(last.date)}: ${last.sets.map((x) => setText(x, false)).join(' / ')} · ` : ''}${esc(tw.why)}</span>`}
           <button class="rulechip" data-a="exRuleOpen" data-id="${ex.id}" aria-expanded="${ui.ruleEx === ex.id}" title="How this lift moves up">${ex.rule === 'manual' ? 'manual' : `+${exStep(ex)} lb${ex.rule === 'try' ? ' · try' : ''}`}${toFailure(ex) ? '' : ' · not to failure'}</button></td>
         <td class="c"><button class="btn sm ${day ? '' : 'primary'}" data-a="logEx" data-id="${ex.id}">${day ? 'Edit' : 'Log'}</button></td></tr>`;
       if (ui.ruleEx === ex.id) {
@@ -717,7 +721,7 @@ function liftsTable(k, group) {
           <button class="btn primary sm" data-a="exRuleSave" data-id="${ex.id}">Save</button><button class="btn ghost sm" data-a="exRuleOpen" data-id="${ex.id}">Cancel</button></div></td></tr>`;
       }
       if (ui.logEx === ex.id) {
-        if (!ui.logSets) ui.logSets = day ? day.sets.map((x) => ({ ...x })) : tw.w.map((w) => ({ w, r: '' }));
+        if (!ui.logSets) ui.logSets = day ? day.sets.map((x) => ({ ...x })) : tw.w.length ? tw.w.map((w) => ({ w, r: '' })) : [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }];
         const sets = ui.logSets;
         const heads = sets.map((_, i) => `<th>Set ${i + 1}</th>`).join('');
         const wRow = sets.map((x, i) => `<td><input class="inp num" id="w${i}" value="${esc(x.w)}" inputmode="decimal" aria-label="Set ${i + 1} weight in lb"></td>`).join('');
@@ -737,7 +741,7 @@ function liftsTable(k, group) {
     ${rows || `<tr><td class="g">1</td><td colspan="4" class="faint">${empty}</td></tr>`}
   </table>
   <div class="addbar"><input class="inp" id="exName" placeholder="Exercise, e.g. Lat pulldown" style="flex:1;min-width:180px" aria-label="Exercise name">
-    <select class="sel" id="exGroup" aria-label="Split day" data-c="exGroup">${SPLIT.filter((g) => g !== 'Abs').map((g) => `<option ${g === group ? 'selected' : ''}>${esc(g)}</option>`).join('')}<option value="Abs">Abs (circuit)</option></select>
+    <select class="sel" id="exGroup" aria-label="Split day" data-c="exGroup">${SPLIT.filter((g) => g !== 'Abs').map((g) => `<option ${g === group ? 'selected' : ''}>${esc(g)}</option>`).join('')}<option value="Abs|weights">Abs (weights)</option><option value="Abs">Abs (bodyweight circuit)</option></select>
     <span id="exWts" class="row-flex" style="gap:8px"><span class="small muted">Start (lb)</span><input class="inp num" id="exW1" placeholder="Set 1" aria-label="Set 1 weight"><input class="inp num" id="exW2" placeholder="Set 2" aria-label="Set 2 weight"><input class="inp num" id="exW3" placeholder="Set 3" aria-label="Set 3 weight"></span>
     <button class="btn" data-a="addEx">Add exercise</button></div></div>`;
 }
@@ -768,16 +772,20 @@ function workoutBurn(k) {
 }
 function workoutsSection(k) {
   const tr = trainingOn(k);
+  // Back & Abs uses the equipment ab moves; the bodyweight circuit shows there only on a day it was logged.
+  // Ab day keeps the circuit, and adds the equipment ab moves only on a day one of them was logged.
+  const circuitDay = abDates().includes(k);
+  const absLiftsOn = DB.sessions.some((s) => s.date === k && (DB.exercises.find((e) => e.id === s.exId) || {}).group === 'Abs' && !isBodyweight(DB.exercises.find((e) => e.id === s.exId)));
   const seg = `<div class="seg daytype" role="group" aria-label="Training for ${shortDay(k)}">${DAY_TYPES.map((t) => `<button class="${tr.type === t ? 'on' : ''}" data-a="setTrain" data-t="${esc(t)}" aria-pressed="${tr.type === t}">${t === 'Abs' ? 'Ab day' : t === 'Rest' ? 'Rest day' : esc(t)}</button>`).join('')}</div>`;
   let body;
   if (tr.type === 'Rest') body = `<div class="restcard"><span class="ttl">Rest day</span><span class="muted">Nothing to log. Recovery is part of the plan.</span></div>`;
-  else if (tr.type === 'Abs') body = abCircuit(k);
-  else if (tr.type === 'Back & Abs') body = liftsTable(k, 'Back') + `<div style="margin-top:14px">${abCircuit(k)}</div>`;
+  else if (tr.type === 'Abs') body = abCircuit(k) + (absLiftsOn ? `<div style="margin-top:14px">${liftsTable(k, ['Abs'])}</div>` : '');
+  else if (tr.type === 'Back & Abs') body = liftsTable(k, ['Back', 'Abs']) + (circuitDay ? `<div style="margin-top:14px">${abCircuit(k)}</div>` : '');
   else if (tr.type) body = liftsTable(k, dayGroup(tr.type));
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
   const wb = workoutBurn(k);
   const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.easySets ? `${wb.easySets} not to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
-  return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Ab circuit: add a round when every round feels solid.</span></div>
+  return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Bodyweight ab circuit: add a round when every round feels solid.</span></div>
   ${seg}${burnLine}${body}</div>`;
 }
 
@@ -1001,8 +1009,8 @@ const A = {
   delLib: (el) => { DB.foodLibrary = DB.foodLibrary.filter((x) => x.id !== el.dataset.id); save(); render(); },
   addEx: () => {
     const n = $('#exName').value.trim(); if (!n) return;
-    const group = $('#exGroup').value, body = group === 'Abs';
-    DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [num($('#exW1').value), num($('#exW2').value), num($('#exW3').value)], ...(body ? { pos: abMoves().length } : {}) });
+    const [group, forceKind] = $('#exGroup').value.split('|'), body = group === 'Abs' && forceKind !== 'weights';
+    DB.exercises.push({ id: uid(), name: n, group, kind: body ? 'bodyweight' : 'weights', start: body ? [] : [$('#exW1').value, $('#exW2').value, $('#exW3').value].filter((v) => v.trim() !== '').map(num), ...(body ? { pos: abMoves().length } : {}) });
     save(); render();
   },
   logEx: (el) => { ui.logEx = ui.logEx === el.dataset.id ? null : el.dataset.id; ui.logSets = null; ui.ruleEx = null; render(); },
