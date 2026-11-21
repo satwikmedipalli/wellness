@@ -560,7 +560,7 @@ function qtyText(srv, serving) {
   if (m) return r1(srv * num(m[1])) + ' ' + m[2];
   return srv + ' × ' + serving;
 }
-const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drinks'];
 function foodTotals(k) {
   const t = { cal: 0, p: 0, c: 0, fib: 0, f: 0, n: 0 };
   DB.foods.filter((x) => x.date === k).forEach((x) => { t.cal += x.cal; t.p += x.p; t.c += x.c; t.fib += x.fib; t.f += x.f; t.n++; });
