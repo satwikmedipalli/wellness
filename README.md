@@ -7,6 +7,8 @@ I built it because my day plan, food log and expenses lived in three
 different places. Now each day is one checklist, and Claude can log food,
 spending and plans for me through a connector.
 
+**Want something like this on your Mac?** Email me at satwik.medipalli@gmail.com.
+
 ## What it does
 
 - **Plans**: day templates made of blocks. *Task* blocks you tick off, and
