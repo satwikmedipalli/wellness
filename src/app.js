@@ -680,19 +680,18 @@ function abCircuit(k) {
 
 // What kind of day it is for training: one of the split days, Abs or Rest. Set by the person;
 // until then it is read off what was logged that day.
-// 5 workout days: Shoulders & Chest, Arms, Back & Abs (Back lifts + the ab circuit), Legs, Abs.
-const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back & Abs', 'Legs', 'Abs', 'Rest'];
-const dayGroup = (t) => (t === 'Back & Abs' ? 'Back' : t); // which lift group a day shows
+// 5 workout days: Shoulders & Chest, Arms, Back, Legs, Abs (the bodyweight circuit and the equipment ab moves).
+const DAY_TYPES = ['Shoulders & Chest', 'Arms', 'Back', 'Legs', 'Abs', 'Rest'];
+const dayGroup = (t) => t; // which lift group a day shows
 function trainingOn(k) {
-  if (DB.training && DB.training[k]) return { type: DB.training[k] === 'Back' ? 'Back & Abs' : DB.training[k], set: true };
+  if (DB.training && DB.training[k]) return { type: DB.training[k] === 'Back & Abs' ? 'Back' : DB.training[k], set: true };
   const ses = DB.sessions.filter((s) => s.date === k).map((s) => DB.exercises.find((e) => e.id === s.exId)).filter(Boolean);
-  const lift = ses.find((e) => !isBodyweight(e));
-  const abs = ses.some(isBodyweight);
-  if (lift && lift.group === 'Back') return { type: 'Back & Abs', set: false };
-  if (abs) return { type: 'Abs', set: false };
-  return { type: lift ? lift.group : '', set: false };
+  const lift = ses.find((e) => !isBodyweight(e) && e.group !== 'Abs');
+  if (lift) return { type: lift.group, set: false };
+  if (ses.length) return { type: 'Abs', set: false };
+  return { type: '', set: false };
 }
-// Weighted lifts for the day: `groups` is one split group or a list (Back & Abs → ['Back', 'Abs']).
+// Weighted lifts for the day: `groups` is one split group or a list of them.
 // Abs lifts here are the equipment ab moves (kind 'weights'); the bodyweight circuit has its own card.
 function liftsTable(k, groups) {
   const want = [].concat(groups || []);
@@ -772,15 +771,12 @@ function workoutBurn(k) {
 }
 function workoutsSection(k) {
   const tr = trainingOn(k);
-  // Back & Abs uses the equipment ab moves; the bodyweight circuit shows there only on a day it was logged.
-  // Ab day keeps the circuit, and adds the equipment ab moves only on a day one of them was logged.
-  const circuitDay = abDates().includes(k);
-  const absLiftsOn = DB.sessions.some((s) => s.date === k && (DB.exercises.find((e) => e.id === s.exId) || {}).group === 'Abs' && !isBodyweight(DB.exercises.find((e) => e.id === s.exId)));
+  // Ab day: the bodyweight circuit, then the equipment ab moves (weighted Abs lifts) when there are any.
+  const hasAbLifts = DB.exercises.some((e) => e.group === 'Abs' && !isBodyweight(e));
   const seg = `<div class="seg daytype" role="group" aria-label="Training for ${shortDay(k)}">${DAY_TYPES.map((t) => `<button class="${tr.type === t ? 'on' : ''}" data-a="setTrain" data-t="${esc(t)}" aria-pressed="${tr.type === t}">${t === 'Abs' ? 'Ab day' : t === 'Rest' ? 'Rest day' : esc(t)}</button>`).join('')}</div>`;
   let body;
   if (tr.type === 'Rest') body = `<div class="restcard"><span class="ttl">Rest day</span><span class="muted">Nothing to log. Recovery is part of the plan.</span></div>`;
-  else if (tr.type === 'Abs') body = abCircuit(k) + (absLiftsOn ? `<div style="margin-top:14px">${liftsTable(k, ['Abs'])}</div>` : '');
-  else if (tr.type === 'Back & Abs') body = liftsTable(k, ['Back', 'Abs']) + (circuitDay ? `<div style="margin-top:14px">${abCircuit(k)}</div>` : '');
+  else if (tr.type === 'Abs') body = abCircuit(k) + (hasAbLifts ? `<div style="margin-top:14px">${liftsTable(k, ['Abs'])}</div>` : '');
   else if (tr.type) body = liftsTable(k, dayGroup(tr.type));
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
   const wb = workoutBurn(k);
