@@ -2,7 +2,7 @@
 // Plain JavaScript (no imports) so it runs on Supabase (Deno) and in Node tests.
 
 const PROTOCOL = '2025-06-18';
-const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drinks'];
 
 // ---------------------------------------------------------------- helpers
 const pad = (n) => String(n).padStart(2, '0');
