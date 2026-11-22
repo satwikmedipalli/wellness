@@ -9,6 +9,7 @@ const pad = (n) => String(n).padStart(2, '0');
 const uid = () => Math.random().toString(36).slice(2, 10);
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 const r1 = (n) => Math.round(n * 10) / 10;
+const r2 = (n) => Math.round(n * 100) / 100; // money keeps its cents
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const parseKey = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 const fmtKey = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
@@ -209,12 +210,12 @@ function summarize(doc, from, to, tz) {
   for (let k = from; k <= to; k = addDays(k, 1)) { const t = trainingOn(doc, k); if (t) trainingDays[t] = (trainingDays[t] || 0) + 1; }
   const ex = doc.expenses.filter((e) => e.date >= from && e.date <= to);
   const byCat = {}, byCard = {};
-  ex.forEach((e) => { byCat[e.category] = r1((byCat[e.category] || 0) + e.amount); const c = e.card || 'Cash / other'; byCard[c] = r1((byCard[c] || 0) + e.amount); });
+  ex.forEach((e) => { byCat[e.category] = r2((byCat[e.category] || 0) + e.amount); const c = e.card || 'Cash / other'; byCard[c] = r2((byCard[c] || 0) + e.amount); });
   return {
     from, to,
     routine: { daysPlanned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null, blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks, workoutSessions: doc.sessions.filter((s) => s.date >= from && s.date <= to).length, trainingDays },
     health: { daysWithFood: foodDays.length, avgCalories: avg((t) => t.calories), avgProtein: avg((t) => t.protein), avgFiber: avg((t) => t.fiber), daysProteinGoalMet: foodDays.filter((x) => x.t.protein >= doc.settings.proteinTarget).length, totalDeficit: defDays ? Math.round(def) : null, daysWithBurnLogged: defDays },
-    spending: { total: r1(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard }
+    spending: { total: r2(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard }
   };
 }
 
@@ -379,7 +380,7 @@ function runTool(name, args, doc, tz) {
       if (a.card) { const c = norm(a.card); ex = ex.filter((e) => norm(e.card || 'cash').includes(c)); }
       if (a.category) { const c = norm(a.category); ex = ex.filter((e) => norm(e.category).includes(c)); }
       ex.sort((x, y) => (x.date < y.date ? -1 : 1));
-      return { write: false, result: { from, to, count: ex.length, total: r1(ex.reduce((s, e) => s + e.amount, 0)), entries: ex.map((e) => ({ id: e.id, date: e.date, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount })) } };
+      return { write: false, result: { from, to, count: ex.length, total: r2(ex.reduce((s, e) => s + e.amount, 0)), entries: ex.map((e) => ({ id: e.id, date: e.date, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount })) } };
     }
     case 'log_food': {
       const k = resolveDate(a.date, tz);
@@ -411,7 +412,7 @@ function runTool(name, args, doc, tz) {
     case 'log_expenses': {
       const added = [], notes = [];
       for (const e of a.entries || []) {
-        const amount = r1(num(e.amount));
+        const amount = r2(num(e.amount));
         if (!e.item || !amount) throw new Error('Each expense needs an item and a non-zero amount.');
         let category = matchFrom(doc.categories, e.category) || 'Other';
         if (e.category && !matchFrom(doc.categories, e.category)) notes.push(`Category "${e.category}" isn’t one of yours, so "${e.item}" went under Other.`);
