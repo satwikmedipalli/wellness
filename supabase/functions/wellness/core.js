@@ -64,7 +64,7 @@ const sortBlocks = (bl) => bl.sort((a, b) => (mins(a.start) ?? 1e9) - (mins(b.st
 export function emptyDoc() {
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68 },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5 },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [], days: {}, foodLibrary: [], foods: [], burns: {}, exercises: [], sessions: [], training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
@@ -194,6 +194,23 @@ function describeDay(doc, k) {
   return out;
 }
 
+// Weekly goals: deficit goal = daily goal × 7 plus the shortfall carried over from the week before (counted from the
+// first week with food logged); workout days = days with any workout logged, against a weekly goal.
+function weekDeficit(doc, ws) {
+  let def = 0, days = 0;
+  for (let i = 0; i < 7; i++) { const dk = addDays(ws, i); const t = foodTotals(doc, dk); if (doc.burns[dk] != null && t.items) { def += doc.burns[dk] - t.calories; days++; } }
+  return { def: Math.round(def), days };
+}
+function weekGoals(doc, ws) {
+  const S = doc.settings || {};
+  const base = Math.round((num(S.deficitGoal) || 500) * 7);
+  const first = doc.foods.reduce((m, f) => (!m || f.date < m ? f.date : m), null);
+  let carry = 0;
+  if (first) { let w = weekStart(first); while (w < ws) { carry = Math.max(0, base + carry - weekDeficit(doc, w).def); w = addDays(w, 7); } }
+  const got = weekDeficit(doc, ws).def;
+  const workoutDays = new Set(doc.sessions.filter((s) => s.date >= ws && s.date <= addDays(ws, 6)).map((s) => s.date)).size;
+  return { deficitGoal: base + carry, deficitBase: base, carriedOver: carry, deficitSoFar: got, deficitLeft: Math.max(0, base + carry - got), workoutDays, workoutDaysGoal: num(S.workoutDaysGoal) || 5 };
+}
 function summarize(doc, from, to, tz) {
   const today = localToday(tz);
   if (to > today) to = today;
@@ -361,7 +378,9 @@ function runTool(name, args, doc, tz) {
       const k = resolveDate(a.date, tz);
       const from = a.period === 'month' ? k.slice(0, 8) + '01' : weekStart(k);
       const to = a.period === 'month' ? lastOfMonth(k) : addDays(from, 6);
-      return { write: false, result: summarize(doc, from, to, tz) };
+      const sum = summarize(doc, from, to, tz);
+      if (a.period !== 'month') sum.weekGoals = weekGoals(doc, from);
+      return { write: false, result: sum };
     }
     case 'get_setup': return {
       write: false,

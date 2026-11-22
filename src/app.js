@@ -65,7 +65,7 @@ function defaults() {
   const F = (name, serving, cal, f, c, fib, p, note) => ({ id: uid(), name, serving, cal, f, c, fib, p, note: note || '' });
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68 },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5 },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [],
     days: {},
@@ -791,8 +791,8 @@ VIEWS.health = () => {
   const burn = DB.burns[k];
   const S = DB.settings;
   const ws = weekStart(k);
-  let wkDef = 0, wkDays = 0;
-  for (let i = 0; i < 7; i++) { const dk = addDays(ws, i); if (DB.burns[dk] != null && foodTotals(dk).n) { wkDef += DB.burns[dk] - foodTotals(dk).cal; wkDays++; } }
+  const { def: wkDef, days: wkDays } = weekDeficit(ws);
+  const wg = weekGoal(ws);
   const foods = DB.foods.filter((x) => x.date === k);
   const body = MEALS.map((m) => {
     const items = foods.filter((x) => x.meal === m);
@@ -807,7 +807,7 @@ VIEWS.health = () => {
     <div class="stat"><span class="k">Deficit</span><span class="v">${burn != null ? Math.round(burn - t.cal) : '—'}</span></div>
     <div class="stat"><span class="k">Protein · ${S.proteinTarget} g goal</span><span class="v">${r1(t.p)}</span><div class="bar"><i style="width:${Math.min(100, pct(t.p, S.proteinTarget))}%"></i></div></div>
     <div class="stat"><span class="k">Fiber · ${S.fiberTarget} g goal</span><span class="v">${r1(t.fib)}</span><div class="bar alt"><i style="width:${Math.min(100, pct(t.fib, S.fiberTarget))}%"></i></div></div>
-    <div class="stat"><span class="k">Week deficit · ${wkDays} day${wkDays === 1 ? '' : 's'}</span><span class="v">${wkDays ? Math.round(wkDef) : '—'}</span></div>
+    <div class="stat"><span class="k">Week deficit · goal ${wg.goal.toLocaleString('en-US')}${wg.carry ? ` (+${wg.carry.toLocaleString('en-US')} carried)` : ''}</span><span class="v">${wkDays ? Math.round(wkDef) : '—'}</span><div class="bar"><i style="width:${Math.min(100, Math.max(0, pct(wkDef, wg.goal)))}%"></i></div></div>
   </div>
   <div class="sheet"><table><colgroup><col style="width:40px"><col><col style="width:120px"><col style="width:70px"><col style="width:84px"><col style="width:74px"><col style="width:74px"><col style="width:62px"><col style="width:52px"></colgroup>
     <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td>E</td><td>F</td><td>G</td><td></td></tr>
@@ -870,6 +870,26 @@ VIEWS.spending = () => {
 };
 
 // ---------- summary ----------
+// ---------- weekly goals ----------
+// Deficit goal per week = daily goal × 7, plus whatever the week before fell short of its own goal (carry-over),
+// counted from the first week with food logged. Workout days = days with any workout logged, against a weekly goal.
+function weekDeficit(ws) {
+  let def = 0, days = 0;
+  for (let i = 0; i < 7; i++) { const dk = addDays(ws, i); const t = foodTotals(dk); if (DB.burns[dk] != null && t.n) { def += DB.burns[dk] - t.cal; days++; } }
+  return { def: Math.round(def), days };
+}
+function weekGoal(ws) {
+  const base = Math.round((num(DB.settings.deficitGoal) || 500) * 7);
+  const first = DB.foods.reduce((m, f) => (!m || f.date < m ? f.date : m), null);
+  if (!first) return { base, carry: 0, goal: base };
+  let w = weekStart(first), carry = 0;
+  while (w < ws) { const got = weekDeficit(w).def; carry = Math.max(0, base + carry - got); w = addDays(w, 7); }
+  return { base, carry, goal: base + carry };
+}
+function weekWorkouts(ws) {
+  const days = new Set(DB.sessions.filter((s) => s.date >= ws && s.date <= addDays(ws, 6)).map((s) => s.date));
+  return { done: days.size, goal: num(DB.settings.workoutDaysGoal) || 5 };
+}
 function summarize(from, to) {
   const tk = todayKey();
   if (to > tk) to = tk;
@@ -897,6 +917,7 @@ function summarize(from, to) {
 VIEWS.summary = () => {
   const tk = todayKey(), ws = weekStart(tk), ms = monthKey(tk) + '-01';
   const W = summarize(ws, addDays(ws, 6)), M = summarize(ms, monthKey(tk) + '-31');
+  const WG = weekGoal(ws), WD = weekDeficit(ws), WW = weekWorkouts(ws);
   const row = (label, a, b) => `<tr><td>${label}</td><td class="mono r">${a ?? '—'}</td><td class="mono r">${b ?? '—'}</td></tr>`;
   const sec = (t) => `<tr class="sec"><td colspan="3">${t}</td></tr>`;
   const f0 = (v) => (v == null ? '—' : Math.round(v));
@@ -909,12 +930,12 @@ VIEWS.summary = () => {
   });
   const cats = new Set([...Object.keys(W.cats), ...Object.keys(M.cats)]);
   return `<div class="head"><div class="head-title"><span class="kicker">Summary · so far</span><h1 class="h1">How it’s going</h1></div></div>
-  <div class="stats"><div class="stat"><span class="k">Avg score · this week</span><span class="v" style="color:var(--accT)">${W.avgScore ?? '—'}${W.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Avg score · ${MON[parseKey(tk).getMonth()]}</span><span class="v" style="color:var(--accT)">${M.avgScore ?? '—'}${M.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Spent · this week</span><span class="v">${money(W.spend)}</span></div><div class="stat"><span class="k">Spent · ${MON[parseKey(tk).getMonth()]}</span><span class="v">${money(M.spend)}</span></div></div>
+  <div class="stats"><div class="stat"><span class="k">Avg score · this week</span><span class="v" style="color:var(--accT)">${W.avgScore ?? '—'}${W.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Avg score · ${MON[parseKey(tk).getMonth()]}</span><span class="v" style="color:var(--accT)">${M.avgScore ?? '—'}${M.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Spent · this week</span><span class="v">${money(W.spend)}</span></div><div class="stat"><span class="k">Spent · ${MON[parseKey(tk).getMonth()]}</span><span class="v">${money(M.spend)}</span></div><div class="stat"><span class="k">Deficit · goal ${WG.goal.toLocaleString('en-US')}</span><span class="v">${WD.def.toLocaleString('en-US')}</span><div class="bar"><i style="width:${Math.min(100, Math.max(0, pct(WD.def, WG.goal)))}%"></i></div></div><div class="stat"><span class="k">Workout days · this week</span><span class="v">${WW.done} / ${WW.goal}</span><div class="bar alt"><i style="width:${Math.min(100, pct(WW.done, WW.goal))}%"></i></div></div></div>
   <div class="sheet" style="max-width:760px"><table><colgroup><col><col style="width:140px"><col style="width:140px"></colgroup>
     <tr><th>Metric</th><th class="r">This week</th><th class="r">This month</th></tr>
     ${sec('Routine')}${row('Days planned', W.planned, M.planned)}${row('Average day score', W.avgScore != null ? W.avgScore + '%' : '—', M.avgScore != null ? M.avgScore + '%' : '—')}${row('Blocks done', `${W.blocksDone}/${W.blocksTotal}`, `${M.blocksDone}/${M.blocksTotal}`)}${row('Workout sessions logged', W.workouts, M.workouts)}
     ${pickRows}
-    ${sec('Health')}${row('Days with food logged', W.foodDays, M.foodDays)}${row('Avg calories', f0(W.avgCal), f0(M.avgCal))}${row('Avg protein (g)', f0(W.avgP), f0(M.avgP))}${row('Avg fiber (g)', f0(W.avgFib), f0(M.avgFib))}${row(`Days protein ≥ ${DB.settings.proteinTarget} g`, W.proteinHit, M.proteinHit)}${row('Total deficit (cal)', W.defDays ? Math.round(W.def) : '—', M.defDays ? Math.round(M.def) : '—')}
+    ${sec('Health')}${row('Days with food logged', W.foodDays, M.foodDays)}${row('Avg calories', f0(W.avgCal), f0(M.avgCal))}${row('Avg protein (g)', f0(W.avgP), f0(M.avgP))}${row('Avg fiber (g)', f0(W.avgFib), f0(M.avgFib))}${row(`Days protein ≥ ${DB.settings.proteinTarget} g`, W.proteinHit, M.proteinHit)}${row('Total deficit (cal)', W.defDays ? Math.round(W.def) : '—', M.defDays ? Math.round(M.def) : '—')}${row(`Deficit goal (${(num(DB.settings.deficitGoal) || 500)}/day + carry-over)`, WG.goal.toLocaleString('en-US'), '')}${row('Carried over from last week', WG.carry ? WG.carry.toLocaleString('en-US') : '0', '')}${row('Deficit still to go', Math.max(0, WG.goal - WD.def).toLocaleString('en-US'), '')}${row('Workout days', `${WW.done} / ${WW.goal}`, '')}
     ${sec('Spending')}${row('Total', money(W.spend), money(M.spend))}${[...cats].sort((a, b) => (M.cats[b] || 0) - (M.cats[a] || 0)).map((c) => row(esc(c), money(W.cats[c] || 0), money(M.cats[c] || 0))).join('')}
     ${(() => { const cs = new Set([...Object.keys(W.cardsT), ...Object.keys(M.cardsT)]); return cs.size ? sec('Spending by card') + [...cs].sort((a, b) => (M.cardsT[b] || 0) - (M.cardsT[a] || 0)).map((c) => row(esc(c), money(W.cardsT[c] || 0), money(M.cardsT[c] || 0))).join('') : ''; })()}
   </table></div><div class="hint" style="margin-top:10px">Week starts Monday. Only days up to today count.</div>`;
@@ -925,7 +946,7 @@ VIEWS.settings = () => {
   const S = DB.settings;
   return `<div class="head"><div class="head-title"><span class="kicker">Settings</span><h1 class="h1">Preferences</h1></div></div>
   <div class="sheet" style="max-width:640px;padding:16px;display:flex;flex-direction:column;gap:14px">
-    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label></div>
+    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Deficit goal / day<input class="inp num" value="${S.deficitGoal ?? 500}" data-c="set" data-f="deficitGoal"></label><label class="fld">Workout days / week<input class="inp num" value="${S.workoutDaysGoal ?? 5}" data-c="set" data-f="workoutDaysGoal"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label></div>
     ${window.api ? `<label class="row-flex small"><input type="checkbox" id="loginChk" data-c="login"> Open Wellness when I log in (so alerts keep coming)</label>
     <div class="row-flex"><button class="btn" data-a="testNote">Send a test notification</button><span class="hint">If nothing shows, allow Wellness in System Settings → Notifications.</span></div>` : '<div class="hint">Running in a browser preview: notifications and open-at-login work in the Mac app.</div>'}
     ${window.api && window.api.updateInfo ? `<div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:10px">
