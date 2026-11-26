@@ -97,7 +97,8 @@ function defaults() {
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: [],
-    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' }
+    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' },
+    trades: []
   };
 }
 
@@ -1058,6 +1059,60 @@ document.addEventListener('mouseleave', hideTip);
 document.addEventListener('click', hideTip, true);
 document.addEventListener('wheel', hideTip, { passive: true });
 
+// ---------- trades (stocks + options) ----------
+// A trade is { id, kind: stock|option, symbol, side: long|short, qty, buy, sell, open, close, fees, opt?: {type, strike, expiry} }.
+// Long: buy at open, sell at close. Short: sell at open, buy back at close. Options are per contract (× 100).
+// P/L = (sell − buy) × qty × multiplier − fees, counted as Stocks income on the close date.
+const tradeMult = (t) => (t.kind === 'option' ? 100 : 1);
+const isClosed = (t) => t.close && t.sell !== '' && t.sell != null && t.buy !== '' && t.buy != null;
+function tradePnl(t) { if (!isClosed(t)) return null; return (num(t.sell) - num(t.buy)) * num(t.qty) * tradeMult(t) - num(t.fees); }
+function tradeCost(t) { return (t.side === 'short' ? num(t.sell) : num(t.buy)) * num(t.qty) * tradeMult(t); }
+function tradeName(t) { return t.kind === 'option' && t.opt ? `${t.symbol} ${t.opt.strike ? '$' + t.opt.strike + ' ' : ''}${t.opt.type === 'put' ? 'put' : 'call'}${t.opt.expiry ? ' ' + shortDay(t.opt.expiry).replace(/^\w+ /, MON[+t.opt.expiry.slice(5, 7) - 1].slice(0, 3) + ' ') : ''}` : t.symbol; }
+const tradeIncome = (from, to) => (DB.trades || []).filter((t) => isClosed(t) && t.close >= from && t.close <= to).map((t) => ({ id: 'trade-' + t.id, date: t.close, source: 'Stocks', item: `${t.side === 'short' ? 'Short ' : ''}${tradeName(t)} · ${num(t.qty)} ${t.kind === 'option' ? 'contract' + (num(t.qty) === 1 ? '' : 's') : 'share' + (num(t.qty) === 1 ? '' : 's')}`, amount: Math.round(tradePnl(t) * 100) / 100, trade: true }));
+
+function tradesSection(mk) {
+  const tk = todayKey(), T = DB.trades || [], f = ui.tf || { kind: 'stock', side: 'long' };
+  const open = T.filter((t) => !isClosed(t)), closedM = T.filter((t) => isClosed(t) && monthKey(t.close) === mk);
+  const pnlM = closedM.reduce((a, t) => a + tradePnl(t), 0), wins = closedM.filter((t) => tradePnl(t) > 0).length;
+  const allClosed = T.filter(isClosed), pnlAll = allClosed.reduce((a, t) => a + tradePnl(t), 0);
+  const best = [...closedM].sort((a, b) => tradePnl(b) - tradePnl(a))[0], worst = [...closedM].sort((a, b) => tradePnl(a) - tradePnl(b))[0];
+  const list = [...open.sort((a, b) => (a.open < b.open ? 1 : -1)), ...T.filter(isClosed).sort((a, b) => (a.close < b.close ? 1 : -1)).filter((t) => monthKey(t.close) === mk || ui.tAll)];
+  const row = (t) => {
+    const p = tradePnl(t), cost = tradeCost(t), pct = p != null && cost ? (p / cost) * 100 : null, held = dayDiff(t.open, t.close || tk);
+    const tp = tip(esc(tradeName(t)), [['Type', `${t.kind === 'option' ? 'Option' : 'Stock'} · ${t.side === 'short' ? 'short' : 'long'}`], ['Quantity', `${num(t.qty)} ${t.kind === 'option' ? 'contracts (× 100)' : 'shares'}`], ['Bought at', t.buy !== '' && t.buy != null ? money(num(t.buy)) : '—'], ['Sold at', t.sell !== '' && t.sell != null ? money(num(t.sell)) : '—'], ['Cost basis', money(cost)], ['Fees', money(num(t.fees))], ['Profit / loss', p == null ? 'open' : `<b>${signed(p)}</b>`], ['Return', pct == null ? '—' : (pct >= 0 ? '+' : '') + r1(pct) + '%'], ['Held', held + ' day' + (held === 1 ? '' : 's')]]);
+    return `<tr${tp}><td><b>${esc(tradeName(t))}</b>${t.side === 'short' ? ' <span class="tag-s">short</span>' : ''}</td><td class="small">${t.kind === 'option' ? 'Option' : 'Stock'}</td><td class="mono r">${num(t.qty)}</td><td class="mono r">${t.buy !== '' && t.buy != null ? money(num(t.buy)) : '—'}</td><td class="mono r">${t.sell !== '' && t.sell != null ? money(num(t.sell)) : '—'}</td><td class="mono small">${shortDay(t.open)}${t.close ? ' → ' + shortDay(t.close) : ''}</td>
+      <td class="mono r ${p < 0 ? 'neg' : ''}">${p == null ? '<span class="faint">open</span>' : signed(p)}</td><td class="mono r small ${p < 0 ? 'neg' : 'faint'}">${pct == null ? '' : (pct >= 0 ? '+' : '') + r1(pct) + '%'}</td>
+      <td class="c">${p == null ? `<button class="btn sm" data-a="tCloseOpen" data-id="${t.id}">Close</button>` : ''}<button class="icon-btn" data-a="tDel" data-id="${t.id}" aria-label="Delete trade">${ic('x', 13)}</button></td></tr>
+      ${ui.tClose === t.id ? `<tr class="chiprow"><td colspan="9"><div class="row-flex"><span class="small">${t.side === 'short' ? 'Bought back' : 'Sold'} at</span><input class="inp num" id="tcPrice" placeholder="0.00"><input class="inp" type="date" id="tcDate" value="${tk}"><button class="btn primary sm" data-a="tCloseSave" data-id="${t.id}">Save</button>${t.kind === 'option' ? `<button class="btn sm" data-a="tExpire" data-id="${t.id}">Expired worthless</button>` : ''}<button class="btn ghost sm" data-a="tCloseCancel">Cancel</button></div></td></tr>` : ''}`;
+  };
+  return `<div class="row-flex" style="margin:26px 0 10px"><h2 class="h2">Trades</h2><span class="small faint">profit / loss is counted as Stocks income on the day you close</span><label class="small" style="margin-left:auto;display:flex;gap:6px;align-items:center"><input type="checkbox" data-c="tAll" ${ui.tAll ? 'checked' : ''}> Show all closed trades</label></div>
+  <div class="stats" style="margin-bottom:12px">
+    <div class="stat"><span class="k">Realised · ${MON[+mk.slice(5) - 1]}</span><span class="v ${pnlM < 0 ? 'neg' : ''}">${signed(pnlM)}</span><span class="small faint">${closedM.length} closed</span></div>
+    <div class="stat"><span class="k">Win rate</span><span class="v">${closedM.length ? Math.round((wins / closedM.length) * 100) + '%' : '—'}</span><span class="small faint">${wins} of ${closedM.length}</span></div>
+    <div class="stat hit"${best ? tip(esc(tradeName(best)), [['Profit', signed(tradePnl(best))]]) : ''}><span class="k">Best</span><span class="v">${best ? signed(tradePnl(best)) : '—'}</span><span class="small faint">${best ? esc(tradeName(best)) : ''}</span></div>
+    <div class="stat hit"${worst ? tip(esc(tradeName(worst)), [['Result', signed(tradePnl(worst))]]) : ''}><span class="k">Worst</span><span class="v ${worst && tradePnl(worst) < 0 ? 'neg' : ''}">${worst ? signed(tradePnl(worst)) : '—'}</span><span class="small faint">${worst ? esc(tradeName(worst)) : ''}</span></div>
+    <div class="stat"><span class="k">Open positions</span><span class="v">${open.length}</span><span class="small faint">${money(open.reduce((a, t) => a + tradeCost(t), 0))} in</span></div>
+    <div class="stat"><span class="k">All-time realised</span><span class="v ${pnlAll < 0 ? 'neg' : ''}">${signed(pnlAll)}</span><span class="small faint">${allClosed.length} trades</span></div>
+  </div>
+  <div class="sheet"><table><colgroup><col><col style="width:80px"><col style="width:70px"><col style="width:104px"><col style="width:104px"><col style="width:150px"><col style="width:116px"><col style="width:84px"><col style="width:120px"></colgroup>
+    <tr><th>Trade</th><th>Type</th><th class="r">Qty</th><th class="r">Buy</th><th class="r">Sell</th><th>Dates</th><th class="r">P / L</th><th class="r">Return</th><th></th></tr>
+    ${list.map(row).join('') || '<tr><td colspan="9" class="faint">No trades yet. Add one below — leave the closing price empty while it’s still open.</td></tr>'}
+  </table>
+  <div class="addbar tradebar">
+    <div class="seg bi"><button class="${f.kind !== 'option' ? 'on' : ''}" data-a="tSet" data-f="kind" data-v="stock">Stock</button><button class="${f.kind === 'option' ? 'on' : ''}" data-a="tSet" data-f="kind" data-v="option">Option</button></div>
+    <div class="seg bi"><button class="${f.side !== 'short' ? 'on' : ''}" data-a="tSet" data-f="side" data-v="long">Long</button><button class="${f.side === 'short' ? 'on' : ''}" data-a="tSet" data-f="side" data-v="short">Short</button></div>
+    <label class="fld">Symbol<input class="inp" id="tSym" style="width:90px;text-transform:uppercase" placeholder="NVDA"></label>
+    ${f.kind === 'option' ? `<label class="fld">Call / put<select class="sel" id="tOT"><option value="call">Call</option><option value="put">Put</option></select></label><label class="fld">Strike<input class="inp num" id="tStrike" placeholder="0"></label><label class="fld">Expiry<input class="inp" type="date" id="tExp"></label>` : ''}
+    <label class="fld">${f.kind === 'option' ? 'Contracts' : 'Shares'}<input class="inp num" id="tQty" placeholder="1"></label>
+    <label class="fld">${f.side === 'short' ? 'Sell' : 'Buy'} price${f.kind === 'option' ? ' (per share)' : ''}<input class="inp num" id="tP1" placeholder="0.00"></label>
+    <label class="fld">Opened<input class="inp" type="date" id="tD1" value="${tk}"></label>
+    <label class="fld">${f.side === 'short' ? 'Buy-back' : 'Sell'} price<input class="inp num" id="tP2" placeholder="open"></label>
+    <label class="fld">Closed<input class="inp" type="date" id="tD2"></label>
+    <label class="fld">Fees<input class="inp num" id="tFee" placeholder="0"></label>
+    <button class="btn primary" data-a="tAdd">Add trade</button></div></div>
+  <div class="hint" style="margin-top:8px">Options: enter the premium per share as quoted (e.g. 2.35); it’s multiplied by 100 per contract. Leave the closing price empty for an open position and close it later.</div>`;
+}
+
 // ---------- income (Money → Income tab) ----------
 // Income entries are { id, date, source, item, amount } (amount can be negative for a stock loss).
 // A pay schedule adds each paycheck on its payday; ids are pay-<date> so syncing never doubles one.
@@ -1079,7 +1134,7 @@ function runPay() {
   }
   return changed;
 }
-const incomeIn = (from, to) => (DB.income || []).filter((e) => e.date >= from && e.date <= to);
+const incomeIn = (from, to) => [...(DB.income || []).filter((e) => e.date >= from && e.date <= to), ...tradeIncome(from, to)];
 const signed = (n) => (n >= 0 ? '+' : '−') + money(Math.abs(n)).replace('−', '');
 
 function moneyBars(mk) { // earned vs spent, last 6 months, two series side by side
@@ -1117,7 +1172,7 @@ function incomeView() {
   const by = (s) => sumAmt(inc.filter((x) => x.source === s));
   const pm = addMonths(mk, -1), pe = sumAmt(incomeIn(pm + '-01', pm + '-31'));
   const srcs = groupBy(inc, (x) => x.source);
-  const rows = inc.map((e, i) => `<tr${tip(esc(e.item || e.source), [['Amount', `<b>${signed(e.amount)}</b>`], ['Date', longDay(e.date)], ['Source', esc(e.source)], ['Share of the month', pctTxt(e.amount, earned)]], [], e.auto ? 'Added by your pay schedule' : '')}><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item || '')}${e.auto ? ' <span class="faint small">· auto</span>' : ''}</td><td class="small">${esc(e.source)}</td><td class="mono r ${e.amount < 0 ? 'neg' : ''}">${signed(e.amount)}</td><td class="c"><button class="icon-btn" data-a="delInc" data-id="${e.id}" aria-label="Remove ${esc(e.item || e.source)}">${ic('x', 13)}</button></td></tr>`).join('');
+  const rows = inc.map((e, i) => `<tr${tip(esc(e.item || e.source), [['Amount', `<b>${signed(e.amount)}</b>`], ['Date', longDay(e.date)], ['Source', esc(e.source)], ['Share of the month', pctTxt(e.amount, earned)]], [], e.auto ? 'Added by your pay schedule' : e.trade ? 'From your Trades list — edit it there' : '')}><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item || '')}${e.auto ? ' <span class="faint small">· auto</span>' : ''}</td><td class="small">${esc(e.source)}</td><td class="mono r ${e.amount < 0 ? 'neg' : ''}">${signed(e.amount)}</td><td class="c">${e.trade ? '<span class="faint">—</span>' : `<button class="icon-btn" data-a="delInc" data-id="${e.id}" aria-label="Remove ${esc(e.item || e.source)}">${ic('x', 13)}</button>`}</td></tr>`).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Money · Income</span><h1 class="h1">${monthLabel(mk).split(' ')[0]}</h1></div>${dateNav('sNav', 'This month')}</div>
   <div class="stats">
     <div class="stat hit"${tip('Earned · ' + monthLabel(mk), [['Total', `<b>${money(earned)}</b>`], [`${MON[+pm.slice(5) - 1]}`, money(pe)], ['Change', chg(earned, pe)], ['Entries', inc.length]])}><span class="k">Earned · ${MON[+mk.slice(5) - 1]}</span><span class="v">${money(earned)}</span><span class="small faint">${pe ? chg(earned, pe) + ' vs ' + MON[+pm.slice(5) - 1].slice(0, 3) : 'nothing logged last month'}</span></div>
@@ -1146,8 +1201,9 @@ function incomeView() {
     ${rows || '<tr><td class="g">1</td><td colspan="5" class="faint">No income logged this month.</td></tr>'}
     ${rows ? `<tr class="total"><td></td><td colspan="3">Total</td><td class="mono r">${signed(earned)}</td><td></td></tr>` : ''}
   </table>
-  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="iDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">What<input class="inp" id="iItem" placeholder="Paycheck, sold NVDA, dividend…"></label><label class="fld">Source<select class="sel" id="iSrc">${(DB.incomeSources || ['Salary', 'Stocks']).map((s) => `<option>${esc(s)}</option>`).join('')}</select></label><label class="fld">Amount<input class="inp num" id="iAmt" placeholder="0.00"></label><button class="btn primary" data-a="addInc">Add</button></div></div>
-  <div class="hint" style="margin-top:8px">Amounts are take-home. For stocks, log what you realised when you sold (a loss as a negative number) and any dividends.</div>`;
+  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="iDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">What<input class="inp" id="iItem" placeholder="Paycheck, dividend…"></label><label class="fld">Source<select class="sel" id="iSrc">${(DB.incomeSources || ['Salary', 'Stocks']).map((s) => `<option>${esc(s)}</option>`).join('')}</select></label><label class="fld">Amount<input class="inp num" id="iAmt" placeholder="0.00"></label><button class="btn primary" data-a="addInc">Add</button></div></div>
+  <div class="hint" style="margin-top:8px">Amounts are take-home. Trades below add their profit or loss here automatically; log dividends here as Stocks.</div>
+  ${tradesSection(mk)}`;
 }
 const moneyTabs = () => `<div class="bitabs"><div class="seg bi"><button class="${ui.mTab !== 'income' ? 'on' : ''}" data-a="mTab" data-t="spend">Spending</button><button class="${ui.mTab === 'income' ? 'on' : ''}" data-a="mTab" data-t="income">Income</button></div></div>`;
 { const spendView = VIEWS.spending; VIEWS.spending = () => moneyTabs() + (ui.mTab === 'income' ? incomeView() : spendView()); }
@@ -1242,6 +1298,11 @@ const BI_DS = {
     measures: { amount: ['Amount earned', 'money', 'sum'], count: ['Entries', 'int', 'sum'] },
     rows: (f, t) => incomeIn(f, t).map((e) => ({ date: e.date, source: e.source, item: e.item || e.source, amount: e.amount, count: 1 }))
   },
+  trades: {
+    label: 'Trades', fields: { symbol: 'Symbol', kind: 'Stock or option', side: 'Long or short', result: 'Win or loss' },
+    measures: { pnl: ['Profit / loss', 'money', 'sum'], count: ['Trades closed', 'int', 'sum'], wins: ['Winning trades', 'int', 'sum'] },
+    rows: (f, t) => (DB.trades || []).filter((x) => isClosed(x) && x.close >= f && x.close <= t).map((x) => { const p = tradePnl(x); return { date: x.close, symbol: x.symbol, kind: x.kind === 'option' ? 'Option' : 'Stock', side: x.side === 'short' ? 'Short' : 'Long', result: p > 0 ? 'Win' : p < 0 ? 'Loss' : 'Flat', pnl: p, count: 1, wins: p > 0 ? 1 : 0 }; })
+  },
   cash: {
     label: 'Cash flow', fields: { dir: 'In or out' },
     measures: { net: ['Net (earned − spent)', 'money', 'sum'], earned: ['Earned', 'money', 'sum'], spent: ['Spent', 'money', 'sum'] },
@@ -1265,7 +1326,7 @@ const BI_RANGES = { thisWeek: 'This week', lastWeek: 'Last week', last7: 'Last 7
 const BI_SIZES = [['1', 'S'], ['2', 'M'], ['3', 'L'], ['4', 'Full']];
 
 function biEarliest() {
-  const ds = [...DB.expenses.map((e) => e.date), ...(DB.income || []).map((e) => e.date), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
+  const ds = [...DB.expenses.map((e) => e.date), ...(DB.income || []).map((e) => e.date), ...(DB.trades || []).map((t) => t.open), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
   return ds.length ? ds.reduce((a, b) => (a < b ? a : b)) : todayKey();
 }
 function biRange(p) {
@@ -1530,6 +1591,19 @@ const A = {
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
   hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
+  tSet: (el) => { ui.tf = { ...(ui.tf || { kind: 'stock', side: 'long' }), [el.dataset.f]: el.dataset.v }; render(); },
+  tAdd: () => { const f = ui.tf || { kind: 'stock', side: 'long' }, sym = $('#tSym').value.trim().toUpperCase(), qty = num($('#tQty').value), p1 = $('#tP1').value.trim(), p2 = $('#tP2').value.trim();
+    if (!sym) { $('#tSym').focus(); return; } if (!(qty > 0)) { $('#tQty').focus(); return; } if (p1 === '') { $('#tP1').focus(); return; }
+    const t = { id: uid(), kind: f.kind, side: f.side, symbol: sym, qty, fees: num($('#tFee').value), open: $('#tD1').value || todayKey(), close: '', buy: '', sell: '' };
+    if (f.side === 'short') { t.sell = num(p1); if (p2 !== '') { t.buy = num(p2); t.close = $('#tD2').value || todayKey(); } } else { t.buy = num(p1); if (p2 !== '') { t.sell = num(p2); t.close = $('#tD2').value || todayKey(); } }
+    if (f.kind === 'option') t.opt = { type: $('#tOT').value, strike: num($('#tStrike').value) || '', expiry: $('#tExp').value || '' };
+    DB.trades = DB.trades || []; DB.trades.push(t); save(); render(); toast(isClosed(t) ? 'Trade added · ' + signed(tradePnl(t)) : 'Open position added'); },
+  tCloseOpen: (el) => { ui.tClose = el.dataset.id; render(); setTimeout(() => { const i = $('#tcPrice'); if (i) i.focus(); }, 30); },
+  tCloseCancel: () => { ui.tClose = null; render(); },
+  tCloseSave: (el) => { const t = (DB.trades || []).find((x) => x.id === el.dataset.id), v = $('#tcPrice').value.trim(); if (!t) return; if (v === '') { $('#tcPrice').focus(); return; }
+    if (t.side === 'short') t.buy = num(v); else t.sell = num(v); t.close = $('#tcDate').value || todayKey(); ui.tClose = null; save(); render(); toast('Closed · ' + signed(tradePnl(t))); },
+  tExpire: (el) => { const t = (DB.trades || []).find((x) => x.id === el.dataset.id); if (!t) return; if (t.side === 'short') t.buy = 0; else t.sell = 0; t.close = (t.opt && t.opt.expiry && t.opt.expiry <= todayKey()) ? t.opt.expiry : todayKey(); ui.tClose = null; save(); render(); toast('Expired · ' + signed(tradePnl(t))); },
+  tDel: (el) => { const t = (DB.trades || []).find((x) => x.id === el.dataset.id); if (!t || !confirm(`Delete the ${tradeName(t)} trade?`)) return; DB.trades = DB.trades.filter((x) => x.id !== t.id); save(); render(); },
   mTab: (el) => { ui.mTab = el.dataset.t; ui.sFilter = null; render(); },
   addInc: () => { const item = $('#iItem').value.trim(), amt = num($('#iAmt').value); if (!amt) { $('#iAmt').focus(); return; } DB.income.push({ id: uid(), date: $('#iDate').value || todayKey(), source: $('#iSrc').value || 'Salary', item: item || $('#iSrc').value, amount: amt }); save(); render(); toast('Added ' + signed(amt)); },
   delInc: (el) => { DB.income = DB.income.filter((x) => x.id !== el.dataset.id); save(); render(); },
@@ -1748,6 +1822,7 @@ const C = {
     img.onload = () => { const sc = Math.min(1, 2200 / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
       try { localStorage.setItem('wellness-bg', c.toDataURL('image/jpeg', 0.84)); toast('Background set'); } catch { toast('That photo is too large — try a smaller one'); } applyBg(); render(); };
     img.src = url; },
+  tAll: (el) => { ui.tAll = el.checked; render(); },
   biIn: (el) => { const t = ui.biDraft, f = el.dataset.f; let v = el.value; if (f === 'target' && el.tagName === 'INPUT') v = v.trim() === '' ? '' : String(num(v));
     t[f] = v;
     if (f === 'src') { const ds = BI_DS[v]; t.m = Object.keys(ds.measures)[0]; t.agg = ''; t.ff = ''; t.fv = ''; if (!(t.by in BI_TIME) && t.by !== 'none') t.by = Object.keys(ds.fields)[0]; }
@@ -1818,6 +1893,8 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Enter' && e.target.matches('#eAmt,#eItem')) A.addExp();
   if (e.key === 'Enter' && e.target.matches('#iAmt,#iItem')) A.addInc();
+  if (e.key === 'Enter' && e.target.matches('.tradebar input')) A.tAdd();
+  if (e.key === 'Enter' && e.target.matches('#tcPrice')) A.tCloseSave({ dataset: { id: ui.tClose } });
   if (e.key === 'Enter' && e.target.matches('#fName,#fSrv,#fCal,#fP,#fC,#fFib,#fF')) A.addFood();
   if (e.key === 'Escape' && ui.open) { ui.open = null; render(); }
 });

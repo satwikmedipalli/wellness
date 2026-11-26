@@ -70,7 +70,8 @@ export function emptyDoc() {
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: [],
-    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' }
+    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' },
+    trades: []
   };
 }
 const withDefaults = (doc) => Object.assign(emptyDoc(), doc || {});
@@ -188,7 +189,7 @@ function describeDay(doc, k) {
   out.training = trainingOn(doc, k);
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
-  const inc = (doc.income || []).filter((e) => e.date === k);
+  const inc = allIncome(doc, k, k);
   if (inc.length) out.income = inc.map((e) => ({ id: e.id, item: e.item, source: e.source, amount: e.amount }));
   const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
   const ses = doc.sessions.filter((s) => s.date === k).sort((a, b) => exOrder(a) - exOrder(b));
@@ -236,9 +237,20 @@ function summarize(doc, from, to, tz) {
     routine: { daysPlanned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null, blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks, workoutSessions: doc.sessions.filter((s) => s.date >= from && s.date <= to).length, trainingDays },
     health: { daysWithFood: foodDays.length, avgCalories: avg((t) => t.calories), avgProtein: avg((t) => t.protein), avgFiber: avg((t) => t.fiber), daysProteinGoalMet: foodDays.filter((x) => x.t.protein >= doc.settings.proteinTarget).length, totalDeficit: defDays ? Math.round(def) : null, daysWithBurnLogged: defDays },
     spending: { total: r2(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard },
-    income: (() => { const inc = (doc.income || []).filter((e) => e.date >= from && e.date <= to); const bySource = {}; inc.forEach((e) => { bySource[e.source] = r2((bySource[e.source] || 0) + e.amount); }); const earned = r2(inc.reduce((a, e) => a + e.amount, 0)), spent = r2(ex.reduce((a, e) => a + e.amount, 0)); return { earned, bySource, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null }; })()
+    income: (() => { const inc = allIncome(doc, from, to); const bySource = {}; inc.forEach((e) => { bySource[e.source] = r2((bySource[e.source] || 0) + e.amount); }); const earned = r2(inc.reduce((a, e) => a + e.amount, 0)), spent = r2(ex.reduce((a, e) => a + e.amount, 0)); return { earned, bySource, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null }; })()
   };
 }
+
+
+// ---------------------------------------------------------------- trades (stocks + options)
+// P/L = (sell − buy) × qty × (100 for options) − fees, counted as Stocks income on the close date.
+const tradeMult = (t) => (t.kind === 'option' ? 100 : 1);
+const isClosed = (t) => !!t.close && t.sell !== '' && t.sell != null && t.buy !== '' && t.buy != null;
+const tradePnl = (t) => (isClosed(t) ? r2((num(t.sell) - num(t.buy)) * num(t.qty) * tradeMult(t) - num(t.fees)) : null);
+const tradeName = (t) => (t.kind === 'option' && t.opt ? `${t.symbol} ${t.opt.strike ? '$' + t.opt.strike + ' ' : ''}${t.opt.type === 'put' ? 'put' : 'call'}${t.opt.expiry ? ' exp ' + t.opt.expiry : ''}` : t.symbol);
+const tradeOut = (t) => ({ id: t.id, trade: tradeName(t), kind: t.kind, side: t.side, qty: t.qty, buy: t.buy === '' ? null : t.buy, sell: t.sell === '' ? null : t.sell, opened: t.open, closed: t.close || null, fees: t.fees || 0, pnl: tradePnl(t), status: isClosed(t) ? 'closed' : 'open' });
+const tradeIncome = (doc, from, to) => (doc.trades || []).filter((t) => isClosed(t) && t.close >= from && t.close <= to).map((t) => ({ id: 'trade-' + t.id, date: t.close, source: 'Stocks', item: tradeName(t), amount: tradePnl(t), trade: true }));
+const allIncome = (doc, from, to) => [...(doc.income || []).filter((e) => e.date >= from && e.date <= to), ...tradeIncome(doc, from, to)];
 
 // ---------------------------------------------------------------- tools
 const dateProp = { type: 'string', description: 'YYYY-MM-DD, or "today" / "tomorrow" / "yesterday". Defaults to today in the user’s time zone.' };
@@ -372,14 +384,35 @@ const TOOLS = [
     annotations: { readOnlyHint: true }
   },
   {
+    name: 'log_trade',
+    description: 'Log a stock or option trade with its prices so profit/loss is calculated (and counted as Stocks income on the close date). Long: buy_price at open, sell_price at close. Short: sell_price at open, buy_price to close. Options: price is the premium per share as quoted; qty is contracts (× 100). Leave the closing price out for an open position.',
+    inputSchema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['stock', 'option'] }, side: { type: 'string', enum: ['long', 'short'], description: 'Default long' },
+      symbol: { type: 'string' }, qty: { type: 'number', description: 'Shares, or contracts for options' },
+      buy_price: { type: 'number' }, sell_price: { type: 'number' }, opened: dateProp, closed: dateProp, fees: { type: 'number' },
+      option_type: { type: 'string', enum: ['call', 'put'] }, strike: { type: 'number' }, expiry: { type: 'string', description: 'YYYY-MM-DD' }
+    }, required: ['kind', 'symbol', 'qty'] }
+  },
+  {
+    name: 'close_trade',
+    description: 'Close an open trade (id from list_trades): price is the sell price for a long or the buy-back price for a short; 0 for an option that expired worthless.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, price: { type: 'number' }, date: dateProp }, required: ['id', 'price'] }
+  },
+  {
+    name: 'list_trades',
+    description: 'List trades: open positions and trades closed between two dates, with profit/loss, win rate and totals.',
+    inputSchema: { type: 'object', properties: { from: dateProp, to: dateProp, symbol: { type: 'string' } } },
+    annotations: { readOnlyHint: true }
+  },
+  {
     name: 'set_training_day',
     description: 'Say what kind of training day a date is: one of the 5 workout days (Shoulders & Chest, Arms, Back, Legs, Abs) or Rest. Shown in the Health view’s day picker. day=null clears it.',
     inputSchema: { type: 'object', properties: { date: dateProp, day: { type: ['string', 'null'], enum: [...DAY_TYPES, null] } }, required: ['day'] }
   },
   {
     name: 'remove_entries',
-    description: 'Delete food, expense or income entries by id (ids come from get_day, list_expenses or list_income).',
-    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } }, income_ids: { type: 'array', items: { type: 'string' } } } },
+    description: 'Delete food, expense, income or trade entries by id (ids come from get_day, list_expenses, list_income or list_trades).',
+    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } }, income_ids: { type: 'array', items: { type: 'string' } }, trade_ids: { type: 'array', items: { type: 'string' } } } },
     annotations: { destructiveHint: true }
   }
 ];
@@ -443,6 +476,35 @@ function runTool(name, args, doc, tz) {
       const t = foodTotals(doc, k);
       return { write: true, result: { added: added.map((x) => `${x.name} (${x.qty}): ${x.cal} cal, ${x.p} g protein, ${x.fib} g fiber${x.note ? ' — ' + x.note : ''}`), dayTotals: t, proteinLeft: Math.max(0, r1(S.proteinTarget - t.protein)), fiberLeft: Math.max(0, r1(S.fiberTarget - t.fiber)) } };
     }
+    case 'log_trade': {
+      doc.trades = doc.trades || [];
+      const side = a.side === 'short' ? 'short' : 'long', qty = num(a.qty);
+      if (!a.symbol || !(qty > 0)) throw new Error('A trade needs a symbol and a quantity.');
+      const opening = side === 'short' ? a.sell_price : a.buy_price, closing = side === 'short' ? a.buy_price : a.sell_price;
+      if (opening == null) throw new Error(side === 'short' ? 'A short needs sell_price (the opening price).' : 'A long needs buy_price (the opening price).');
+      const t = { id: uid(), kind: a.kind === 'option' ? 'option' : 'stock', side, symbol: String(a.symbol).toUpperCase(), qty, fees: num(a.fees), open: resolveDate(a.opened, tz), close: '', buy: '', sell: '' };
+      if (side === 'short') t.sell = num(opening); else t.buy = num(opening);
+      if (closing != null) { if (side === 'short') t.buy = num(closing); else t.sell = num(closing); t.close = resolveDate(a.closed, tz); }
+      if (t.kind === 'option') t.opt = { type: a.option_type === 'put' ? 'put' : 'call', strike: a.strike != null ? num(a.strike) : '', expiry: a.expiry || '' };
+      doc.trades.push(t);
+      return { write: true, result: tradeOut(t) };
+    }
+    case 'close_trade': {
+      const t = (doc.trades || []).find((x) => x.id === a.id);
+      if (!t) throw new Error('No trade with that id (see list_trades).');
+      if (isClosed(t)) throw new Error('That trade is already closed.');
+      if (t.side === 'short') t.buy = num(a.price); else t.sell = num(a.price);
+      t.close = resolveDate(a.date, tz);
+      return { write: true, result: tradeOut(t) };
+    }
+    case 'list_trades': {
+      const from = a.from ? resolveDate(a.from, tz) : '0000-01-01', to = a.to ? resolveDate(a.to, tz) : '9999-12-31';
+      let T = doc.trades || [];
+      if (a.symbol) T = T.filter((t) => norm(t.symbol) === norm(a.symbol));
+      const open = T.filter((t) => !isClosed(t)), closed = T.filter((t) => isClosed(t) && t.close >= from && t.close <= to);
+      const pnl = r2(closed.reduce((x, t) => x + tradePnl(t), 0)), wins = closed.filter((t) => tradePnl(t) > 0).length;
+      return { write: false, result: { open: open.map(tradeOut), closed: closed.map(tradeOut), realised: pnl, winRate: closed.length ? Math.round((wins / closed.length) * 100) : null } };
+    }
     case 'log_income': {
       doc.income = doc.income || []; const sources = doc.incomeSources && doc.incomeSources.length ? doc.incomeSources : ['Salary', 'Stocks'];
       const added = [], notes = [];
@@ -458,11 +520,11 @@ function runTool(name, args, doc, tz) {
     }
     case 'list_income': {
       const from = resolveDate(a.from, tz), to = resolveDate(a.to, tz);
-      let inc = (doc.income || []).filter((e) => e.date >= from && e.date <= to);
+      let inc = allIncome(doc, from, to);
       if (a.source) { const c = norm(a.source); inc = inc.filter((e) => norm(e.source).includes(c)); }
       inc.sort((x, y) => (x.date < y.date ? -1 : 1));
       const earned = r2(inc.reduce((s2, e) => s2 + e.amount, 0)), spent = r2(doc.expenses.filter((e) => e.date >= from && e.date <= to).reduce((s2, e) => s2 + e.amount, 0));
-      return { write: false, result: { from, to, count: inc.length, earned, spent, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null, paySchedule: doc.pay && doc.pay.on ? doc.pay : null, entries: inc.map((e) => ({ id: e.id, date: e.date, item: e.item, source: e.source, amount: e.amount, auto: !!e.auto })) } };
+      return { write: false, result: { from, to, count: inc.length, earned, spent, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null, paySchedule: doc.pay && doc.pay.on ? doc.pay : null, entries: inc.map((e) => ({ id: e.id, date: e.date, item: e.item, source: e.source, amount: e.amount, auto: !!e.auto, fromTrade: !!e.trade })) } };
     }
     case 'log_expenses': {
       const added = [], notes = [];
@@ -592,7 +654,9 @@ function runTool(name, args, doc, tz) {
       doc.foods = doc.foods.filter((x) => !fi.has(x.id));
       doc.expenses = doc.expenses.filter((x) => !ei.has(x.id));
       doc.income = (doc.income || []).filter((x) => !ii.has(x.id));
-      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length, removedIncome: ni - doc.income.length } };
+      const ti = new Set(a.trade_ids || []), nt = (doc.trades || []).length;
+      doc.trades = (doc.trades || []).filter((x) => !ti.has(x.id));
+      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length, removedIncome: ni - doc.income.length, removedTrades: nt - doc.trades.length } };
     }
     default: throw new Error(`Unknown tool ${name}`);
   }

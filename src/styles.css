@@ -589,3 +589,6 @@ html,body{background:#cfd6de}
 .payform{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
 .payform .fld:nth-child(2){grid-column:span 1}.payform .inp,.payform .sel{width:100%}
 .payform .row-flex{grid-column:1 / -1}
+.tradebar{align-items:flex-end}
+.tradebar .seg{align-self:flex-end;margin-bottom:1px}
+.tag-s{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:999px;background:var(--soft2);color:var(--ink2);margin-left:4px}
