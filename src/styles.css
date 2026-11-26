@@ -221,3 +221,37 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 /* workout burn line */
 .burnline{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--ink2)}
 .burnline .big{font-size:20px;font-weight:600;color:var(--accT)}
+
+/* spending dashboard */
+.dash{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dash .span2{grid-column:span 2}.dash .span3{grid-column:span 3}
+.dcard{background:var(--card);border:1px solid var(--line2);border-radius:12px;padding:12px 16px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.dh{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.h3{margin:0;font-family:var(--serif);font-size:19px;font-weight:600}
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.chart .cg{stroke:var(--line);stroke-width:1}
+.chart .ct{fill:var(--ink3);font-family:var(--mono);font-size:10px}
+.chart .cb{fill:var(--acc)}
+.chart .cb.soft{fill:color-mix(in srgb,var(--acc) 42%,var(--card))}
+.chart g:hover .cb{filter:brightness(1.12)}
+.chart .cl{fill:none;stroke:var(--acc);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .cl.prev{stroke:var(--ink3);stroke-dasharray:4 4}
+.chart .cdot{fill:var(--acc);stroke:var(--card);stroke-width:2}
+.legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend .sw{width:16px;height:0;border-top:2px solid var(--acc);display:inline-block}
+.legend .sw.prev{border-top:2px dashed var(--ink3)}
+.hbars{display:flex;flex-direction:column;gap:9px}
+.hb-top{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;margin-bottom:4px}
+.hb-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hb-val{font-size:12px;white-space:nowrap}
+.hb-track{height:8px;border-radius:4px;background:var(--gut)}
+.hb-track>i{display:block;height:100%;border-radius:4px;background:var(--acc)}
+.hb:hover .hb-track>i{filter:brightness(1.12)}
+.bigs{display:flex;flex-direction:column}
+.big{display:grid;grid-template-columns:22px minmax(0,1fr) 84px 150px 150px 100px;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+.big:last-child{border-bottom:none}
+.big .r{text-align:right}
+.big-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+@media (max-width:1050px){.dash{grid-template-columns:1fr 1fr}.dash .span3{grid-column:span 2}}

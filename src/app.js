@@ -838,6 +838,61 @@ VIEWS.health = () => {
 
 // ---------- spending ----------
 function expensesIn(from, to) { return DB.expenses.filter((e) => e.date >= from && e.date <= to); }
+const daysIn = (mk) => { const [y, m] = mk.split('-').map(Number); return new Date(y, m, 0).getDate(); };
+const moneyShort = (n) => { const c = DB.settings.currency || '$'; return n >= 1000 ? c + (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : c + Math.round(n); };
+const niceMax = (v) => { if (v <= 10) return 10; const p = Math.pow(10, Math.floor(Math.log10(v))); const s = [1, 2, 2.5, 5, 10].find((x) => x * p >= v); return s * p; };
+
+// Daily bars for the month. One series, so no legend; each bar has a hover tooltip (title).
+function spendDailyChart(mk, month) {
+  const n = daysIn(mk), W = 640, H = 236, L = 44, R = 8, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+  const per = Array.from({ length: n }, (_, i) => month.filter((e) => +e.date.slice(8) === i + 1).reduce((s, e) => s + e.amount, 0));
+  const max = niceMax(Math.max(...per)), slot = pw / n, bw = Math.max(3, Math.min(16, slot - 3));
+  const tk = todayKey(), isNow = monthKey(tk) === mk, today = +tk.slice(8);
+  const grid = [0, 0.5, 1].map((f) => { const y = T + ph - f * ph; return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" class="cg"/><text x="${L - 6}" y="${y + 3.5}" class="ct" text-anchor="end">${moneyShort(max * f)}</text>`; }).join('');
+  const bars = per.map((v, i) => { const x = L + i * slot + (slot - bw) / 2, h = v ? Math.max(2, (v / max) * ph) : 0, y = T + ph - h; const k = `${mk}-${pad(i + 1)}`;
+    return `<g><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"><title>${shortDay(k)}: ${money(v)}</title></rect>${h ? `<path d="M${x},${T + ph} v${-(h - 3)} q0,-3 3,-3 h${bw - 6} q3,0 3,3 v${h - 3} z" class="cb${isNow && i + 1 === today ? ' now' : ''}" pointer-events="none"/>` : ''}</g>`; }).join('');
+  const ticks = per.map((_, i) => (i === 0 || (i + 1) % 5 === 0) ? `<text x="${L + i * slot + slot / 2}" y="${H - 6}" class="ct" text-anchor="middle">${i + 1}</text>` : '').join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Spending per day in ${monthLabel(mk)}">${grid}${bars}${ticks}</svg>`;
+}
+
+// Cumulative spend this month vs last month, by day of month. Two series → legend + end labels.
+function spendPaceChart(mk) {
+  const W = 320, H = 170, L = 40, R = 10, T = 12, B = 22, pw = W - L - R, ph = H - T - B;
+  const pm = addMonths(mk, -1), tk = todayKey();
+  const cum = (m, upto) => { const n = daysIn(m), ex = expensesIn(m + '-01', m + '-31'); let s = 0; const out = []; for (let d = 1; d <= Math.min(n, upto); d++) { s += ex.filter((e) => +e.date.slice(8) === d).reduce((a, e) => a + e.amount, 0); out.push(s); } return out; };
+  const upto = monthKey(tk) === mk ? +tk.slice(8) : (mk > monthKey(tk) ? 0 : 31);
+  const a = cum(mk, upto), b = cum(pm, 31), max = niceMax(Math.max(1, ...a, ...b));
+  const X = (d) => L + ((d - 1) / 30) * pw, Y = (v) => T + ph - (v / max) * ph;
+  const path = (arr) => arr.map((v, i) => `${i ? 'L' : 'M'}${X(i + 1).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${Y(max * f)}" y2="${Y(max * f)}" class="cg"/><text x="${L - 6}" y="${Y(max * f) + 3.5}" class="ct" text-anchor="end">${moneyShort(max * f)}</text>`).join('');
+  const hits = Array.from({ length: 31 }, (_, i) => `<rect x="${X(i + 1) - pw / 60}" y="${T}" width="${pw / 30}" height="${ph}" fill="transparent"><title>Day ${i + 1} — ${MON[+mk.slice(5) - 1].slice(0, 3)}: ${a[i] != null ? money(a[i]) : '—'} · ${MON[+pm.slice(5) - 1].slice(0, 3)}: ${b[i] != null ? money(b[i]) : '—'}</title></rect>`).join('');
+  const endA = a.length ? `<circle cx="${X(a.length)}" cy="${Y(a[a.length - 1])}" r="4" class="cdot"/>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Running total this month versus last month">${grid}
+    ${b.length ? `<path d="${path(b)}" class="cl prev"/>` : ''}${a.length ? `<path d="${path(a)}" class="cl"/>` : ''}${endA}
+    <text x="${L}" y="${H - 5}" class="ct">1</text><text x="${W - R}" y="${H - 5}" class="ct" text-anchor="end">31</text>${hits}</svg>
+    <div class="legend"><span><i class="sw"></i>${MON[+mk.slice(5) - 1]}</span><span><i class="sw prev"></i>${MON[+pm.slice(5) - 1]}</span></div>`;
+}
+
+// Last 6 months, one bar each; the month being viewed is the darker bar.
+function spendMonthsChart(mk) {
+  const W = 320, H = 170, L = 40, R = 6, T = 12, B = 22, pw = W - L - R, ph = H - T - B;
+  const ms = Array.from({ length: 6 }, (_, i) => addMonths(mk, i - 5));
+  const v = ms.map((m) => expensesIn(m + '-01', m + '-31').reduce((s, e) => s + e.amount, 0));
+  const max = niceMax(Math.max(1, ...v)), slot = pw / 6, bw = Math.min(30, slot - 10);
+  const grid = [0, 0.5, 1].map((f) => { const y = T + ph - f * ph; return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" class="cg"/><text x="${L - 6}" y="${y + 3.5}" class="ct" text-anchor="end">${moneyShort(max * f)}</text>`; }).join('');
+  const bars = v.map((x, i) => { const bx = L + i * slot + (slot - bw) / 2, h = x ? Math.max(3, (x / max) * ph) : 0;
+    return `<g><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"><title>${monthLabel(ms[i])}: ${money(x)}</title></rect>${h ? `<path d="M${bx},${T + ph} v${-(h - 4)} q0,-4 4,-4 h${bw - 8} q4,0 4,4 v${h - 4} z" class="cb${i === 5 ? ' now' : ' soft'}" pointer-events="none"/>` : ''}<text x="${L + i * slot + slot / 2}" y="${H - 6}" class="ct" text-anchor="middle">${MON[+ms[i].slice(5) - 1].slice(0, 3)}</text></g>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Spending over the last six months">${grid}${bars}</svg>`;
+}
+
+// Ranked horizontal bars (category or card). Labels and values in text ink; bar carries magnitude.
+function hbars(list, total, empty) {
+  const items = list.filter((x) => x.m > 0).sort((a, b) => b.m - a.m);
+  if (!items.length) return `<div class="faint small">${empty}</div>`;
+  const max = items[0].m;
+  return `<div class="hbars">${items.map((x) => `<div class="hb" title="${esc(x.c)}: ${money(x.m)} this month · ${money(x.w)} this week"><div class="hb-top"><span class="hb-name">${esc(x.c)}</span><span class="mono hb-val">${money(x.m)}<span class="faint"> · ${Math.round((x.m / total) * 100)}%</span></span></div><div class="hb-track"><i style="width:${Math.max(2, (x.m / max) * 100)}%"></i></div></div>`).join('')}</div>`;
+}
+
 VIEWS.spending = () => {
   const mk = ui.sMonth;
   const mFrom = mk + '-01', mTo = mk + '-31';
@@ -845,28 +900,48 @@ VIEWS.spending = () => {
   const month = expensesIn(mFrom, mTo).sort((a, b) => (a.date < b.date ? 1 : -1));
   const week = expensesIn(ws, addDays(ws, 6));
   const sum = (a) => a.reduce((s, e) => s + e.amount, 0);
-  const byCat = DB.categories.map((c) => ({ c, w: sum(week.filter((e) => e.category === c)), m: sum(month.filter((e) => e.category === c)) }));
+  const total = sum(month);
+  const cats = [...new Set([...DB.categories, ...month.map((e) => e.category)])];
+  const byCat = cats.map((c) => ({ c, w: sum(week.filter((e) => e.category === c)), m: sum(month.filter((e) => e.category === c)) }));
   const top = byCat.filter((x) => x.m > 0).sort((a, b) => b.m - a.m)[0];
-  const byCard = DB.cards.map((c) => ({ c, w: sum(week.filter((e) => e.card === c)), m: sum(month.filter((e) => e.card === c)) }));
-  const noCard = { w: sum(week.filter((e) => !e.card || !DB.cards.includes(e.card))), m: sum(month.filter((e) => !e.card || !DB.cards.includes(e.card))) };
+  const byCard = [...DB.cards.map((c) => ({ c, w: sum(week.filter((e) => e.card === c)), m: sum(month.filter((e) => e.card === c)) })),
+    { c: 'Cash / other', w: sum(week.filter((e) => !e.card || !DB.cards.includes(e.card))), m: sum(month.filter((e) => !e.card || !DB.cards.includes(e.card))) }];
+  // Month-to-date vs the same days of last month (whole months when looking back).
+  const isNow = monthKey(tk) === mk, dayN = isNow ? +tk.slice(8) : daysIn(mk);
+  const pm = addMonths(mk, -1), prevSame = sum(expensesIn(pm + '-01', pm + '-' + pad(Math.min(dayN, daysIn(pm)))));
+  const delta = prevSame ? Math.round(((total - prevSame) / prevSame) * 100) : null;
+  const avg = mk > monthKey(tk) ? 0 : total / dayN;
+  const biggest = [...month].sort((a, b) => b.amount - a.amount).slice(0, 5);
   const rows = month.map((e, i) => `<tr><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item)}</td><td class="small">${esc(e.category)}</td><td class="small">${e.card ? esc(e.card) : '<span class="faint">—</span>'}</td><td class="mono r">${money(e.amount)}</td><td class="c"><button class="icon-btn" data-a="delExp" data-id="${e.id}" aria-label="Remove ${esc(e.item)}">${ic('x', 13)}</button></td></tr>`).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Spending</span><h1 class="h1">${monthLabel(mk).split(' ')[0]}</h1></div>${dateNav('sNav', 'This month')}</div>
-  <div class="stats"><div class="stat"><span class="k">This week</span><span class="v">${money(sum(week))}</span></div><div class="stat"><span class="k">${monthLabel(mk)}</span><span class="v">${money(sum(month))}</span></div><div class="stat"><span class="k">Top category</span><span class="v" style="font-size:17px;font-family:var(--sans);font-weight:600">${top ? esc(top.c) : '—'}</span></div><div class="stat"><span class="k">Entries</span><span class="v">${month.length}</span></div></div>
-  <div class="cols"><div class="grow"><div class="sheet"><table><colgroup><col style="width:40px"><col style="width:84px"><col><col style="width:130px"><col style="width:150px"><col style="width:112px"><col style="width:52px"></colgroup>
+  <div class="stats">
+    <div class="stat"><span class="k">${monthLabel(mk)}</span><span class="v">${money(total)}</span></div>
+    <div class="stat"><span class="k">vs ${MON[+pm.slice(5) - 1]}${isNow ? ' · same days' : ''}</span><span class="v">${delta == null ? '—' : (delta > 0 ? '▲ ' : delta < 0 ? '▼ ' : '') + Math.abs(delta) + '%'}</span><span class="small faint">${prevSame ? money(prevSame) + ' then' : 'nothing logged then'}</span></div>
+    <div class="stat"><span class="k">Daily average</span><span class="v">${money(avg)}</span></div>
+    <div class="stat"><span class="k">This week</span><span class="v">${money(sum(week))}</span></div>
+    <div class="stat"><span class="k">Top category</span><span class="v" style="font-size:17px;font-family:var(--sans);font-weight:600">${top ? esc(top.c) : '—'}</span>${top ? `<span class="small faint">${money(top.m)} · ${Math.round((top.m / total) * 100)}%</span>` : ''}</div>
+    <div class="stat"><span class="k">Entries</span><span class="v">${month.length}</span></div>
+  </div>
+  <div class="dash">
+    <section class="dcard span2"><div class="dh"><h2 class="h3">Spending per day</h2><span class="small faint">hover a bar for the amount</span></div>${spendDailyChart(mk, month)}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">By category</h2></div>${hbars(byCat, total, 'No spending this month yet.')}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">Running total</h2></div>${spendPaceChart(mk)}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">Last 6 months</h2></div>${spendMonthsChart(mk)}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">By card</h2></div>${hbars(byCard, total, 'No spending this month yet.')}</section>
+    <section class="dcard span3"><div class="dh"><h2 class="h3">Biggest purchases</h2></div>${biggest.length ? `<div class="bigs">${biggest.map((e, i) => `<div class="big"><span class="mono faint">${i + 1}</span><span class="big-name">${esc(e.item)}</span><span class="mono small muted">${shortDay(e.date)}</span><span class="small muted">${esc(e.category)}</span><span class="small muted">${e.card ? esc(e.card) : 'Cash / other'}</span><span class="mono r">${money(e.amount)}</span></div>`).join('')}</div>` : '<div class="faint small">Nothing logged this month.</div>'}</section>
+  </div>
+  <h2 class="h2" style="margin:22px 0 10px">Transactions</h2>
+  <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:84px"><col><col style="width:150px"><col style="width:150px"><col style="width:112px"><col style="width:52px"></colgroup>
     <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td>E</td><td></td></tr>
     <tr><th class="g">#</th><th>Date</th><th>Item</th><th>Category</th><th>Card</th><th class="r">Amount</th><th></th></tr>
     ${rows || '<tr><td class="g">1</td><td colspan="6" class="faint">No spending logged this month.</td></tr>'}
+    ${rows ? `<tr class="total"><td></td><td colspan="4">Total</td><td class="mono r">${money(total)}</td><td></td></tr>` : ''}
   </table>
-  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="eDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">Item<input class="inp" id="eItem" placeholder="Lunch, gas, Netflix…"></label><label class="fld">Category<select class="sel" id="eCat">${DB.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label><label class="fld">Card<select class="sel" id="eCard">${DB.cards.map((c) => `<option ${c === ui.lastCard ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="" ${ui.lastCard === '' ? 'selected' : ''}>Cash / other</option></select></label><label class="fld">Amount<input class="inp num" id="eAmt" placeholder="0.00"></label><button class="btn primary" data-a="addExp">Add</button></div></div></div>
-  <aside class="panel" style="width:310px"><h2 class="h2" style="font-size:22px">By category</h2><div class="sheet"><table><colgroup><col><col style="width:96px"><col style="width:96px"></colgroup><tr><th>Category</th><th class="r">Week</th><th class="r">Month</th></tr>
-    ${byCat.map((x) => `<tr><td class="small">${esc(x.c)}</td><td class="mono r small ${x.w ? '' : 'faint'}">${money(x.w)}</td><td class="mono r small ${x.m ? '' : 'faint'}">${money(x.m)}</td></tr>`).join('')}
-    <tr class="total"><td>Total</td><td class="mono r small">${money(sum(week))}</td><td class="mono r small">${money(sum(month))}</td></tr></table></div>
-    <h2 class="h2" style="font-size:22px;margin-top:8px">By card</h2><div class="sheet"><table><colgroup><col><col style="width:96px"><col style="width:96px"></colgroup><tr><th>Card</th><th class="r">Week</th><th class="r">Month</th></tr>
-    ${byCard.map((x) => `<tr><td class="small">${esc(x.c)}</td><td class="mono r small ${x.w ? '' : 'faint'}">${money(x.w)}</td><td class="mono r small ${x.m ? '' : 'faint'}">${money(x.m)}</td></tr>`).join('')}
-    ${noCard.m || noCard.w ? `<tr><td class="small muted">Cash / other</td><td class="mono r small">${money(noCard.w)}</td><td class="mono r small">${money(noCard.m)}</td></tr>` : ''}</table></div>
+  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="eDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">Item<input class="inp" id="eItem" placeholder="Lunch, gas, Netflix…"></label><label class="fld">Category<select class="sel" id="eCat">${DB.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label><label class="fld">Card<select class="sel" id="eCard">${DB.cards.map((c) => `<option ${c === ui.lastCard ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="" ${ui.lastCard === '' ? 'selected' : ''}>Cash / other</option></select></label><label class="fld">Amount<input class="inp num" id="eAmt" placeholder="0.00"></label><button class="btn primary" data-a="addExp">Add</button></div></div>
+  <div class="dash2">
     <details class="box"><summary>Edit cards</summary><div class="inner"><div class="chips">${DB.cards.map((c, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:4px;cursor:default">${esc(c)}<button class="icon-btn" style="width:20px;height:20px;border:none;background:none" data-a="delCard" data-i="${i}" aria-label="Remove ${esc(c)}">${ic('x', 12, 2.2)}</button></span>`).join('')}</div><input class="inp" placeholder="+ Add card" data-c="addCard" aria-label="Add card"></div></details>
     <details class="box"><summary>Edit categories</summary><div class="inner"><div class="chips">${DB.categories.map((c, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:4px;cursor:default">${esc(c)}<button class="icon-btn" style="width:20px;height:20px;border:none;background:none" data-a="delCat" data-i="${i}" aria-label="Remove ${esc(c)}">${ic('x', 12, 2.2)}</button></span>`).join('')}</div><input class="inp" placeholder="+ Add category" data-c="addCat" aria-label="Add category"></div></details>
-  </aside></div>`;
+  </div>`;
 };
 
 // ---------- summary ----------
