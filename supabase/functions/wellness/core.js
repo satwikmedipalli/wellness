@@ -69,7 +69,8 @@ export function emptyDoc() {
     plans: [], days: {}, foodLibrary: [], foods: [], burns: {}, exercises: [], sessions: [], training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
-    expenses: []
+    expenses: [],
+    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' }
   };
 }
 const withDefaults = (doc) => Object.assign(emptyDoc(), doc || {});
@@ -187,6 +188,8 @@ function describeDay(doc, k) {
   out.training = trainingOn(doc, k);
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
+  const inc = (doc.income || []).filter((e) => e.date === k);
+  if (inc.length) out.income = inc.map((e) => ({ id: e.id, item: e.item, source: e.source, amount: e.amount }));
   const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
   const ses = doc.sessions.filter((s) => s.date === k).sort((a, b) => exOrder(a) - exOrder(b));
   if (ses.length) out.workoutBurn = workoutBurn(doc, k);
@@ -232,7 +235,8 @@ function summarize(doc, from, to, tz) {
     from, to,
     routine: { daysPlanned: keys.length, avgScore: sc.length ? Math.round(sc.reduce((a, s) => a + s.pct, 0) / sc.length) : null, blocksDone: sc.reduce((a, s) => a + s.done, 0), blocksTotal: sc.reduce((a, s) => a + s.total, 0), picks, workoutSessions: doc.sessions.filter((s) => s.date >= from && s.date <= to).length, trainingDays },
     health: { daysWithFood: foodDays.length, avgCalories: avg((t) => t.calories), avgProtein: avg((t) => t.protein), avgFiber: avg((t) => t.fiber), daysProteinGoalMet: foodDays.filter((x) => x.t.protein >= doc.settings.proteinTarget).length, totalDeficit: defDays ? Math.round(def) : null, daysWithBurnLogged: defDays },
-    spending: { total: r2(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard }
+    spending: { total: r2(ex.reduce((a, e) => a + e.amount, 0)), byCategory: byCat, byCard },
+    income: (() => { const inc = (doc.income || []).filter((e) => e.date >= from && e.date <= to); const bySource = {}; inc.forEach((e) => { bySource[e.source] = r2((bySource[e.source] || 0) + e.amount); }); const earned = r2(inc.reduce((a, e) => a + e.amount, 0)), spent = r2(ex.reduce((a, e) => a + e.amount, 0)); return { earned, bySource, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null }; })()
   };
 }
 
@@ -357,14 +361,25 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { exercise: { type: 'string' }, step: { type: 'number' }, rule: { type: 'string', enum: ['reps15', 'try', 'manual'] }, to_failure: { type: 'boolean', description: 'Whether its sets go to failure (default true; traps/shrugs and wrist curls default false). Used for the calorie estimate.' }, group: { type: 'string' }, rename: { type: 'string' } }, required: ['exercise'] }
   },
   {
+    name: 'log_income',
+    description: 'Add money earned: take-home pay (source "Salary") or stock results (source "Stocks": realised gain when sold, negative for a loss, or dividends). Other sources the user has added are accepted too (see get_setup).',
+    inputSchema: { type: 'object', properties: { entries: { type: 'array', minItems: 1, items: { type: 'object', properties: { date: dateProp, source: { type: 'string', description: 'Salary or Stocks (or another of the user’s income sources)' }, item: { type: 'string', description: 'e.g. "Paycheck", "Sold NVDA", "Dividend"' }, amount: { type: 'number', description: 'Take-home amount; negative for a stock loss' } }, required: ['amount'] } } }, required: ['entries'] }
+  },
+  {
+    name: 'list_income',
+    description: 'List income between two dates, optionally for one source, with totals, spending over the same dates, net and savings rate.',
+    inputSchema: { type: 'object', properties: { from: dateProp, to: dateProp, source: { type: 'string' } }, required: ['from', 'to'] },
+    annotations: { readOnlyHint: true }
+  },
+  {
     name: 'set_training_day',
     description: 'Say what kind of training day a date is: one of the 5 workout days (Shoulders & Chest, Arms, Back, Legs, Abs) or Rest. Shown in the Health view’s day picker. day=null clears it.',
     inputSchema: { type: 'object', properties: { date: dateProp, day: { type: ['string', 'null'], enum: [...DAY_TYPES, null] } }, required: ['day'] }
   },
   {
     name: 'remove_entries',
-    description: 'Delete food or expense entries by id (ids come from get_day or list_expenses).',
-    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } } } },
+    description: 'Delete food, expense or income entries by id (ids come from get_day, list_expenses or list_income).',
+    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } }, income_ids: { type: 'array', items: { type: 'string' } } } },
     annotations: { destructiveHint: true }
   }
 ];
@@ -387,7 +402,7 @@ function runTool(name, args, doc, tz) {
       result: {
         plans: doc.plans.map((p) => ({ name: p.name, blocks: p.blocks.map((b) => `${b.start ? fmtTime(b.start) + (b.end ? '–' + fmtTime(b.end) : '') : 'any time'} ${b.title}${b.kind === 'choice' ? ' [choice]' : ''}`) })),
         choiceLists: doc.choiceLists.map((l) => ({ name: l.name, options: l.options, noRepeatInOneDay: !!l.distinct })),
-        categories: doc.categories, cards: doc.cards,
+        categories: doc.categories, cards: doc.cards, incomeSources: doc.incomeSources || ['Salary', 'Stocks'], paySchedule: doc.pay && doc.pay.on ? doc.pay : null,
         foodLibrary: doc.foodLibrary.map((f) => `${f.name} (${f.serving}: ${f.cal} cal, ${f.p} P, ${f.c} C, ${f.fib} fib, ${f.f} F)`),
         exercises: doc.exercises.map((e) => `${e.name} (${e.group}${isBodyweight(e) ? ', bodyweight' : `, +${num(e.step) || 10} lb step, rule ${e.rule || 'reps15'}`})`),
         goals: { proteinG: S.proteinTarget, fiberG: S.fiberTarget }
@@ -427,6 +442,27 @@ function runTool(name, args, doc, tz) {
       }
       const t = foodTotals(doc, k);
       return { write: true, result: { added: added.map((x) => `${x.name} (${x.qty}): ${x.cal} cal, ${x.p} g protein, ${x.fib} g fiber${x.note ? ' — ' + x.note : ''}`), dayTotals: t, proteinLeft: Math.max(0, r1(S.proteinTarget - t.protein)), fiberLeft: Math.max(0, r1(S.fiberTarget - t.fiber)) } };
+    }
+    case 'log_income': {
+      doc.income = doc.income || []; const sources = doc.incomeSources && doc.incomeSources.length ? doc.incomeSources : ['Salary', 'Stocks'];
+      const added = [], notes = [];
+      for (const e of a.entries || []) {
+        const amount = r2(num(e.amount));
+        if (!amount) throw new Error('Each income entry needs a non-zero amount.');
+        let source = matchFrom(sources, e.source || 'Salary');
+        if (!source) { source = e.source; notes.push(`"${e.source}" is a new income source; it was added to the list.`); doc.incomeSources = [...sources, source]; }
+        const rec = { id: uid(), date: resolveDate(e.date, tz), source, item: e.item || (source === 'Salary' ? 'Paycheck' : source), amount };
+        doc.income.push(rec); added.push(rec);
+      }
+      return { write: true, result: { added: added.map((x) => `${x.date} ${x.item}: ${x.amount < 0 ? '−' : ''}${S.currency || '$'}${Math.abs(x.amount).toFixed(2)} · ${x.source}`), notes } };
+    }
+    case 'list_income': {
+      const from = resolveDate(a.from, tz), to = resolveDate(a.to, tz);
+      let inc = (doc.income || []).filter((e) => e.date >= from && e.date <= to);
+      if (a.source) { const c = norm(a.source); inc = inc.filter((e) => norm(e.source).includes(c)); }
+      inc.sort((x, y) => (x.date < y.date ? -1 : 1));
+      const earned = r2(inc.reduce((s2, e) => s2 + e.amount, 0)), spent = r2(doc.expenses.filter((e) => e.date >= from && e.date <= to).reduce((s2, e) => s2 + e.amount, 0));
+      return { write: false, result: { from, to, count: inc.length, earned, spent, net: r2(earned - spent), savingsRate: earned > 0 ? Math.round(((earned - spent) / earned) * 100) : null, paySchedule: doc.pay && doc.pay.on ? doc.pay : null, entries: inc.map((e) => ({ id: e.id, date: e.date, item: e.item, source: e.source, amount: e.amount, auto: !!e.auto })) } };
     }
     case 'log_expenses': {
       const added = [], notes = [];
@@ -551,11 +587,12 @@ function runTool(name, args, doc, tz) {
       return { write: true, result: { date: k, training: day } };
     }
     case 'remove_entries': {
-      const fi = new Set(a.food_ids || []), ei = new Set(a.expense_ids || []);
-      const nf = doc.foods.length, ne = doc.expenses.length;
+      const fi = new Set(a.food_ids || []), ei = new Set(a.expense_ids || []), ii = new Set(a.income_ids || []);
+      const nf = doc.foods.length, ne = doc.expenses.length, ni = (doc.income || []).length;
       doc.foods = doc.foods.filter((x) => !fi.has(x.id));
       doc.expenses = doc.expenses.filter((x) => !ei.has(x.id));
-      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length } };
+      doc.income = (doc.income || []).filter((x) => !ii.has(x.id));
+      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length, removedIncome: ni - doc.income.length } };
     }
     default: throw new Error(`Unknown tool ${name}`);
   }

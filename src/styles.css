@@ -577,3 +577,15 @@ html,body{background:#cfd6de}
 .cmdic{color:var(--ink)}
 .chart .cgoal{stroke:var(--dot)}
 .cmdback{background:rgb(15 23 42/30%)}
+/* money: income tab */
+.chart .cb2{fill:color-mix(in srgb,var(--ink) 28%,transparent)}
+.chart .hit:hover .cb2{fill:color-mix(in srgb,var(--ink) 40%,transparent)}
+.chart .cz{stroke:var(--ink3);stroke-width:1}
+.legend .sq{width:10px;height:10px;border-radius:3px;background:var(--acc);display:inline-block}
+.legend .sq.s2{background:color-mix(in srgb,var(--ink) 28%,transparent)}
+.neg{color:var(--bad)!important}
+.payday{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:14px;background:var(--g-inner);border:1px solid var(--line)}
+.payday b{font-size:17px}.payday .mono:not(b){font-size:22px;font-weight:800;letter-spacing:-.03em}
+.payform{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.payform .fld:nth-child(2){grid-column:span 1}.payform .inp,.payform .sel{width:100%}
+.payform .row-flex{grid-column:1 / -1}
