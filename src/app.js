@@ -56,7 +56,14 @@ const ICON = {
   down: '<path d="M6 9l6 6 6-6"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>'
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  auto: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
+  cloud: '<path d="M17.5 19H7a5 5 0 1 1 1.2-9.9A6 6 0 0 1 19.6 11 4 4 0 0 1 17.5 19z"/>',
+  food: '<path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 3c-2 0-3 2.5-3 6s1.4 4 3 4v8"/>',
+  dollar: '<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'
 };
 const ic = (n, s = 16, w = 1.8) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n]}</svg>`;
 
@@ -276,17 +283,70 @@ function choiceWarnings(day) {
 
 // ---------- shell ----------
 const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', 'Log'], ['health', 'Health'], ['spending', 'Spending'], ['summary', 'Dashboard'], ['settings', 'Settings']];
+// ---------- glass shell: docks, top bar, theme, quick actions ----------
+const NAV_DESC = { today: 'Your plan for the day, live', week: 'The week at a glance', plans: 'Day templates and blocks', log: 'Every day, scored', health: 'Food, burn, deficit and workouts', spending: 'Expenses by category and card', summary: 'Build-your-own dashboards', settings: 'Goals, sync and updates' };
+function dockHTML(side) {
+  return `<span class="dind" aria-hidden="true"></span>` + NAV.map(([k, l]) => `<button class="dk ${ui.view === k ? 'on' : ''}" data-a="go" data-v="${k}" ${ui.view === k ? 'aria-current="page"' : ''} aria-label="${l}">${ic(k, 17)}${side ? `<span class="dtip">${l}</span>` : `<span class="dtx">${l}</span>`}</button>`).join('');
+}
+function placeDock(nav) {
+  const cur = nav && nav.querySelector('.dk.on'), ind = nav && nav.querySelector('.dind');
+  if (!cur || !ind) return;
+  ind.style.width = cur.offsetWidth + 'px'; ind.style.height = cur.offsetHeight + 'px';
+  ind.style.transform = `translate(${cur.offsetLeft}px,${cur.offsetTop}px)`;
+  requestAnimationFrame(() => ind.classList.add('ready'));
+}
+function askText() {
+  const tk = todayKey(), day = DB && DB.days[tk];
+  if (day && typeof nowNext === 'function') {
+    const { now, next } = nowNext(day), t = nowMins();
+    const dur = (m) => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), mm = m % 60; return h ? `${h}h${mm ? ' ' + mm + 'm' : ''}` : `${mm}m`; };
+    if (now) return `Now · ${now.b.title} · ${dur(now.e - t)} left`;
+    if (next) return `Next · ${next.b.title} at ${fmtTime(next.b.start)}`;
+    return 'Day done · search or jump to…';
+  }
+  return 'Search or jump to…';
+}
+function themePref() { try { return localStorage.getItem('wellness-theme') || 'auto'; } catch { return 'auto'; } }
+function applyTheme() {
+  const t = themePref(); if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const b = $('#themeBtn'); if (b) { b.innerHTML = ic(t === 'light' ? 'sun' : t === 'dark' ? 'moon' : 'auto', 17); b.title = t === 'auto' ? 'Theme: follows your Mac' : 'Theme: ' + t; }
+}
+function applyBg() { const img = $('#bgimg'); if (!img) return; let u = null; try { u = localStorage.getItem('wellness-bg'); } catch {} if (u) { img.src = u; img.hidden = false; document.body.classList.add('photo'); } else { img.hidden = true; img.removeAttribute('src'); document.body.classList.remove('photo'); } }
 function renderNav() {
-  $('#nav').innerHTML = NAV.map(([k, l]) => `<button class="nav ${ui.view === k ? 'on' : ''}" data-a="go" data-v="${k}" ${ui.view === k ? 'aria-current="page"' : ''}>${ic(k, 17)}${l}</button>`).join('');
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  $('#sidefoot').innerHTML = `Sage · ${dark ? 'Dark' : 'Light'}<br>Follows your Mac’s appearance${APP_VERSION ? `<br><span class="mono">v${APP_VERSION}</span>` : ''}`;
+  const a = $('#nav'), b = $('#nav2');
+  if (a) a.innerHTML = dockHTML(true);
+  if (b) b.innerHTML = dockHTML(false);
+  requestAnimationFrame(() => { placeDock(a); placeDock(b); });
+  const p = $('#gprompt'); if (p) p.textContent = askText();
+  const g = $('#gsub'); if (g) { const d = new Date(); g.textContent = DOW[d.getDay()] + ', ' + MON[d.getMonth()].slice(0, 3) + ' ' + d.getDate(); }
+  const sb = $('#syncBtn'); if (sb) { sb.innerHTML = ic('cloud', 17) + `<i class="${Sync.on() ? (Sync.error ? 'bad' : 'ok') : 'off'}"></i>`; sb.title = Sync.on() ? (Sync.error ? 'Sync problem — open Settings' : 'Synced with the Claude connector') : 'Sync is off'; }
+  applyTheme();
+}
+addEventListener('resize', () => { placeDock($('#nav')); placeDock($('#nav2')); });
+const CMD_ACTIONS = [
+  { k: 'food', label: 'Log food', desc: 'Add something you ate today', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const f = $('#fName'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
+  { k: 'dollar', label: 'Add an expense', desc: 'Log a purchase', run: () => { go('spending'); setTimeout(() => { const f = $('#eItem'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
+  { k: 'health', label: 'Log a workout', desc: 'Open today’s workout', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const w = document.querySelector('.seg.daytype'); if (w) w.scrollIntoView({ block: 'start' }); }, 50); } }
+];
+function cmdItems(q) {
+  const items = [...CMD_ACTIONS.map((x) => ({ ...x, kind: 'Action' })), ...NAV.map(([k, l]) => ({ k, label: l, desc: NAV_DESC[k] || '', kind: 'Go to', run: () => go(k) }))];
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return items.filter((x) => terms.every((t) => (x.label + ' ' + x.desc).toLowerCase().includes(t)));
+}
+function renderCmd() {
+  const box = $('#cmd'); if (!box) return;
+  if (!ui.cmd) { box.innerHTML = ''; return; }
+  const list = cmdItems(ui.cmdQ || '');
+  box.innerHTML = `<div class="cmdback" data-a="cmdClose"></div><div class="cmdbox" role="dialog" aria-label="Quick actions"><label class="cmdin">${ic('search', 16)}<input id="cmdQ" placeholder="Search pages or actions…" value="${esc(ui.cmdQ || '')}" data-i="cmdQ" autocomplete="off"><kbd>esc</kbd></label>
+    <div class="cmdlist">${list.map((x, i) => `<button class="cmdrow ${i === (ui.cmdSel || 0) ? 'on' : ''}" data-a="cmdRun" data-i="${i}"><span class="cmdic">${ic(x.k, 16)}</span><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span><em>${x.kind}</em></button>`).join('') || '<div class="hint" style="padding:12px">Nothing matches.</div>'}</div></div>`;
+  const inp = $('#cmdQ'); if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
 }
 function render() {
   renderNav();
   const v = VIEWS[ui.view] || VIEWS.today;
   const m = $('#main');
   const st = m.scrollTop;
-  m.innerHTML = '<div class="topdrag"></div>' + v();
+  m.innerHTML = v();
   m.scrollTop = st;
   if (ui.view === 'settings') showSyncStatus();
   if (ui.view === 'settings' && window.api) {
@@ -1343,7 +1403,8 @@ VIEWS.settings = () => {
       <div class="row-flex"><button class="btn primary" data-a="syncSave">${Sync.on() ? 'Save & sync now' : 'Connect'}</button>${Sync.on() ? '<button class="btn danger" data-a="syncOff">Disconnect</button>' : ''}<span class="hint" id="syncMsg"></span></div>
     </div>
     <div class="row-flex"><button class="btn" data-a="export">Export my data (JSON)</button><label class="btn" style="cursor:pointer">Import data<input type="file" accept="application/json" data-c="import" class="sr"></label></div>
-    <div class="hint">Light and dark follow your Mac’s appearance (System Settings → Appearance).</div>
+    <div class="row-flex"><b style="margin-right:auto">Background</b><label class="btn" style="cursor:pointer">Choose a photo…<input type="file" accept="image/*" data-c="bgPick" class="sr"></label>${(() => { try { return localStorage.getItem('wellness-bg') ? '<button class="btn" data-a="bgClear">Use the default scene</button>' : ''; } catch { return ''; } })()}</div>
+    <div class="hint">The glass panels sit over a background scene. Pick any photo from your Mac to use your own; it stays on this Mac. The sun / moon button at the top switches light, dark, or following your Mac.</div>
   </div>`;
 };
 
@@ -1363,6 +1424,11 @@ const A = {
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
   hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
+  cmdOpen: () => { ui.cmd = true; ui.cmdQ = ''; ui.cmdSel = 0; renderCmd(); },
+  cmdClose: () => { ui.cmd = false; renderCmd(); },
+  cmdRun: (el) => { const x = cmdItems(ui.cmdQ || '')[+el.dataset.i]; ui.cmd = false; renderCmd(); if (x) x.run(); },
+  themeCycle: () => { const order = ['auto', 'light', 'dark'], t = order[(order.indexOf(themePref()) + 1) % 3]; try { localStorage.setItem('wellness-theme', t); } catch {} applyTheme(); toast(t === 'auto' ? 'Theme follows your Mac' : t === 'light' ? 'Light theme' : 'Dark theme'); },
+  bgClear: () => { try { localStorage.removeItem('wellness-bg'); } catch {} applyBg(); render(); toast('Background reset'); },
   biPage: (el) => { ui.biPage = el.dataset.id; ui.biF = []; ui.biDraft = null; render(); },
   biEditMode: () => { ui.biEdit = !ui.biEdit; if (!ui.biEdit) ui.biDraft = null; render(); },
   biPageAdd: () => { const d = { id: 'd' + uid(), name: 'New page', range: 'thisMonth', tiles: [] }; DB.dashboards.push(d); ui.biPage = d.id; save(); render(); },
@@ -1567,6 +1633,10 @@ const C = {
   listDistinct: (el) => { listById(el.dataset.l).distinct = el.checked; save(); },
   addOpt: (el) => { const v = el.value.trim(); if (v) { listById(el.dataset.l).options.push(v); save(); render(); const n = document.querySelector(`[data-c="addOpt"][data-l="${el.dataset.l}"]`); if (n) n.focus(); } },
   burn: (el) => { if (el.value.trim() === '') delete DB.burns[ui.hDate]; else DB.burns[ui.hDate] = num(el.value); save(); render(); },
+  bgPick: (el) => { const f = el.files && el.files[0]; if (!f) return; const img = new Image(); const url = URL.createObjectURL(f);
+    img.onload = () => { const sc = Math.min(1, 2200 / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      try { localStorage.setItem('wellness-bg', c.toDataURL('image/jpeg', 0.84)); toast('Background set'); } catch { toast('That photo is too large — try a smaller one'); } applyBg(); render(); };
+    img.src = url; },
   biIn: (el) => { const t = ui.biDraft, f = el.dataset.f; let v = el.value; if (f === 'target' && el.tagName === 'INPUT') v = v.trim() === '' ? '' : String(num(v));
     t[f] = v;
     if (f === 'src') { const ds = BI_DS[v]; t.m = Object.keys(ds.measures)[0]; t.agg = ''; t.ff = ''; t.fv = ''; if (!(t.by in BI_TIME) && t.by !== 'none') t.by = Object.keys(ds.fields)[0]; }
@@ -1588,6 +1658,7 @@ const C = {
 
 // food autofill from library
 const I = {
+  cmdQ: (el) => { ui.cmdQ = el.value; ui.cmdSel = 0; const pos = el.selectionStart; renderCmd(); const n = $('#cmdQ'); if (n) n.setSelectionRange(pos, pos); },
   abCell: (el) => {
     const E = ui.ab; if (!E) return;
     E.vals[el.dataset.id][+el.dataset.r] = el.value.trim();
@@ -1627,6 +1698,13 @@ document.addEventListener('focusout', (e) => {
 document.addEventListener('change', (e) => { const el = e.target.closest('[data-c]'); if (el && C[el.dataset.c]) C[el.dataset.c](el); });
 document.addEventListener('input', (e) => { const el = e.target.closest('[data-i]'); if (el && I[el.dataset.i]) I[el.dataset.i](el); });
 document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); ui.cmd ? A.cmdClose() : A.cmdOpen(); return; }
+  if (ui.cmd) {
+    const n = cmdItems(ui.cmdQ || '').length;
+    if (e.key === 'Escape') { A.cmdClose(); return; }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); ui.cmdSel = ((ui.cmdSel || 0) + (e.key === 'ArrowDown' ? 1 : -1) + n) % Math.max(1, n); renderCmd(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); A.cmdRun({ dataset: { i: ui.cmdSel || 0 } }); return; }
+  }
   if (e.key === 'Enter' && e.target.matches('#eAmt,#eItem')) A.addExp();
   if (e.key === 'Enter' && e.target.matches('#fName,#fSrv,#fCal,#fP,#fC,#fFib,#fF')) A.addFood();
   if (e.key === 'Escape' && ui.open) { ui.open = null; render(); }
@@ -1655,6 +1733,7 @@ if (window.api && window.api.onUpdateReady) window.api.onUpdateReady((r) => {
   pruneAll();
   if (saved && JSON.stringify(DB) !== before) save();
   if (!saved) save();
+  applyBg(); applyTheme();
   render();
   Sync.pull();
   setInterval(() => Sync.pull(), 20 * 1000);
