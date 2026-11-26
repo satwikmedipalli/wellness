@@ -72,7 +72,7 @@ function defaults() {
   const F = (name, serving, cal, f, c, fib, p, note) => ({ id: uid(), name, serving, cal, f, c, fib, p, note: note || '' });
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5 },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5, tradeTax: 30 },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [],
     days: {},
@@ -1068,35 +1068,39 @@ const isClosed = (t) => t.close && t.sell !== '' && t.sell != null && t.buy !== 
 function tradePnl(t) { if (!isClosed(t)) return null; return (num(t.sell) - num(t.buy)) * num(t.qty) * tradeMult(t) - num(t.fees); }
 function tradeCost(t) { return (t.side === 'short' ? num(t.sell) : num(t.buy)) * num(t.qty) * tradeMult(t); }
 function tradeName(t) { return t.kind === 'option' && t.opt ? `${t.symbol} ${t.opt.strike ? '$' + t.opt.strike + ' ' : ''}${t.opt.type === 'put' ? 'put' : 'call'}${t.opt.expiry ? ' ' + shortDay(t.opt.expiry).replace(/^\w+ /, MON[+t.opt.expiry.slice(5, 7) - 1].slice(0, 3) + ' ') : ''}` : t.symbol; }
-const tradeIncome = (from, to) => (DB.trades || []).filter((t) => isClosed(t) && t.close >= from && t.close <= to).map((t) => ({ id: 'trade-' + t.id, date: t.close, source: 'Stocks', item: `${t.side === 'short' ? 'Short ' : ''}${tradeName(t)} · ${num(t.qty)} ${t.kind === 'option' ? 'contract' + (num(t.qty) === 1 ? '' : 's') : 'share' + (num(t.qty) === 1 ? '' : 's')}`, amount: Math.round(tradePnl(t) * 100) / 100, trade: true }));
+// Tax: a share of each winning trade (Settings → Trade tax, default 30%) is set aside; earnings get the rest. Losses aren't taxed.
+const taxRate = () => { const v = DB.settings.tradeTax; return (v === '' || v == null ? 30 : num(v)) / 100; };
+const tradeTax = (t) => { const p = tradePnl(t); return p != null && p > 0 ? Math.round(p * taxRate() * 100) / 100 : 0; };
+const tradeNet = (t) => { const p = tradePnl(t); return p == null ? null : Math.round((p - tradeTax(t)) * 100) / 100; };
+const tradeIncome = (from, to) => (DB.trades || []).filter((t) => isClosed(t) && t.close >= from && t.close <= to).map((t) => ({ id: 'trade-' + t.id, date: t.close, source: 'Stocks', item: `${t.side === 'short' ? 'Short ' : ''}${tradeName(t)} · ${num(t.qty)} ${t.kind === 'option' ? 'contract' + (num(t.qty) === 1 ? '' : 's') : 'share' + (num(t.qty) === 1 ? '' : 's')}`, amount: tradeNet(t), gross: Math.round(tradePnl(t) * 100) / 100, tax: tradeTax(t), trade: true }));
 
 function tradesSection(mk) {
   const tk = todayKey(), T = DB.trades || [], f = ui.tf || { kind: 'stock', side: 'long' };
   const open = T.filter((t) => !isClosed(t)), closedM = T.filter((t) => isClosed(t) && monthKey(t.close) === mk);
-  const pnlM = closedM.reduce((a, t) => a + tradePnl(t), 0), wins = closedM.filter((t) => tradePnl(t) > 0).length;
-  const allClosed = T.filter(isClosed), pnlAll = allClosed.reduce((a, t) => a + tradePnl(t), 0);
+  const pnlM = closedM.reduce((a, t) => a + tradePnl(t), 0), taxM = closedM.reduce((a, t) => a + tradeTax(t), 0), netM = pnlM - taxM, rate = Math.round(taxRate() * 100), wins = closedM.filter((t) => tradePnl(t) > 0).length;
+  const allClosed = T.filter(isClosed), pnlAll = allClosed.reduce((a, t) => a + tradePnl(t), 0), taxAll = allClosed.reduce((a, t) => a + tradeTax(t), 0);
   const best = [...closedM].sort((a, b) => tradePnl(b) - tradePnl(a))[0], worst = [...closedM].sort((a, b) => tradePnl(a) - tradePnl(b))[0];
   const list = [...open.sort((a, b) => (a.open < b.open ? 1 : -1)), ...T.filter(isClosed).sort((a, b) => (a.close < b.close ? 1 : -1)).filter((t) => monthKey(t.close) === mk || ui.tAll)];
   const row = (t) => {
     const p = tradePnl(t), cost = tradeCost(t), pct = p != null && cost ? (p / cost) * 100 : null, held = dayDiff(t.open, t.close || tk);
-    const tp = tip(esc(tradeName(t)), [['Type', `${t.kind === 'option' ? 'Option' : 'Stock'} · ${t.side === 'short' ? 'short' : 'long'}`], ['Quantity', `${num(t.qty)} ${t.kind === 'option' ? 'contracts (× 100)' : 'shares'}`], ['Bought at', t.buy !== '' && t.buy != null ? money(num(t.buy)) : '—'], ['Sold at', t.sell !== '' && t.sell != null ? money(num(t.sell)) : '—'], ['Cost basis', money(cost)], ['Fees', money(num(t.fees))], ['Profit / loss', p == null ? 'open' : `<b>${signed(p)}</b>`], ['Return', pct == null ? '—' : (pct >= 0 ? '+' : '') + r1(pct) + '%'], ['Held', held + ' day' + (held === 1 ? '' : 's')]]);
+    const tp = tip(esc(tradeName(t)), [['Type', `${t.kind === 'option' ? 'Option' : 'Stock'} · ${t.side === 'short' ? 'short' : 'long'}`], ['Quantity', `${num(t.qty)} ${t.kind === 'option' ? 'contracts (× 100)' : 'shares'}`], ['Bought at', t.buy !== '' && t.buy != null ? money(num(t.buy)) : '—'], ['Sold at', t.sell !== '' && t.sell != null ? money(num(t.sell)) : '—'], ['Cost basis', money(cost)], ['Fees', money(num(t.fees))], ['Profit / loss', p == null ? 'open' : signed(p)], ...(p == null ? [] : [[`Tax (${Math.round(taxRate() * 100)}% of gains)`, tradeTax(t) ? '−' + money(tradeTax(t)) : 'none (no gain)'], ['Kept after tax', `<b>${signed(tradeNet(t))}</b>`]]), ['Return', pct == null ? '—' : (pct >= 0 ? '+' : '') + r1(pct) + '%'], ['Held', held + ' day' + (held === 1 ? '' : 's')]]);
     return `<tr${tp}><td><b>${esc(tradeName(t))}</b>${t.side === 'short' ? ' <span class="tag-s">short</span>' : ''}</td><td class="small">${t.kind === 'option' ? 'Option' : 'Stock'}</td><td class="mono r">${num(t.qty)}</td><td class="mono r">${t.buy !== '' && t.buy != null ? money(num(t.buy)) : '—'}</td><td class="mono r">${t.sell !== '' && t.sell != null ? money(num(t.sell)) : '—'}</td><td class="mono small">${shortDay(t.open)}${t.close ? ' → ' + shortDay(t.close) : ''}</td>
-      <td class="mono r ${p < 0 ? 'neg' : ''}">${p == null ? '<span class="faint">open</span>' : signed(p)}</td><td class="mono r small ${p < 0 ? 'neg' : 'faint'}">${pct == null ? '' : (pct >= 0 ? '+' : '') + r1(pct) + '%'}</td>
+      <td class="mono r ${p < 0 ? 'neg' : ''}">${p == null ? '<span class="faint">open</span>' : signed(p)}</td><td class="mono r small faint">${p == null ? '' : tradeTax(t) ? '−' + money(tradeTax(t)) : '—'}</td><td class="mono r ${p < 0 ? 'neg' : ''}"><b>${p == null ? '' : signed(tradeNet(t))}</b></td><td class="mono r small ${p < 0 ? 'neg' : 'faint'}">${pct == null ? '' : (pct >= 0 ? '+' : '') + r1(pct) + '%'}</td>
       <td class="c">${p == null ? `<button class="btn sm" data-a="tCloseOpen" data-id="${t.id}">Close</button>` : ''}<button class="icon-btn" data-a="tDel" data-id="${t.id}" aria-label="Delete trade">${ic('x', 13)}</button></td></tr>
-      ${ui.tClose === t.id ? `<tr class="chiprow"><td colspan="9"><div class="row-flex"><span class="small">${t.side === 'short' ? 'Bought back' : 'Sold'} at</span><input class="inp num" id="tcPrice" placeholder="0.00"><input class="inp" type="date" id="tcDate" value="${tk}"><button class="btn primary sm" data-a="tCloseSave" data-id="${t.id}">Save</button>${t.kind === 'option' ? `<button class="btn sm" data-a="tExpire" data-id="${t.id}">Expired worthless</button>` : ''}<button class="btn ghost sm" data-a="tCloseCancel">Cancel</button></div></td></tr>` : ''}`;
+      ${ui.tClose === t.id ? `<tr class="chiprow"><td colspan="11"><div class="row-flex"><span class="small">${t.side === 'short' ? 'Bought back' : 'Sold'} at</span><input class="inp num" id="tcPrice" placeholder="0.00"><input class="inp" type="date" id="tcDate" value="${tk}"><button class="btn primary sm" data-a="tCloseSave" data-id="${t.id}">Save</button>${t.kind === 'option' ? `<button class="btn sm" data-a="tExpire" data-id="${t.id}">Expired worthless</button>` : ''}<button class="btn ghost sm" data-a="tCloseCancel">Cancel</button></div></td></tr>` : ''}`;
   };
-  return `<div class="row-flex" style="margin:26px 0 10px"><h2 class="h2">Trades</h2><span class="small faint">profit / loss is counted as Stocks income on the day you close</span><label class="small" style="margin-left:auto;display:flex;gap:6px;align-items:center"><input type="checkbox" data-c="tAll" ${ui.tAll ? 'checked' : ''}> Show all closed trades</label></div>
+  return `<div class="row-flex" style="margin:26px 0 10px"><h2 class="h2">Trades</h2><span class="small faint">what you keep after tax counts as Stocks income on the day you close; the tax is tracked separately</span><label class="small" style="margin-left:auto;display:flex;gap:6px;align-items:center"><input type="checkbox" data-c="tAll" ${ui.tAll ? 'checked' : ''}> Show all closed trades</label></div>
   <div class="stats" style="margin-bottom:12px">
-    <div class="stat"><span class="k">Realised · ${MON[+mk.slice(5) - 1]}</span><span class="v ${pnlM < 0 ? 'neg' : ''}">${signed(pnlM)}</span><span class="small faint">${closedM.length} closed</span></div>
+    <div class="stat hit"${tip('Trades · ' + monthLabel(mk), [['Profit before tax', signed(pnlM)], [`Tax (${rate}% of gains)`, '−' + money(taxM)], ['Kept', `<b>${signed(netM)}</b>`], ['All time kept', signed(pnlAll - taxAll)], ['All time tax', money(taxAll)]])}><span class="k">Kept after tax · ${MON[+mk.slice(5) - 1]}</span><span class="v ${netM < 0 ? 'neg' : ''}">${signed(netM)}</span><span class="small faint">${signed(pnlM)} before tax</span></div>
+    <div class="stat"><span class="k">Tax set aside · ${rate}%</span><span class="v">${money(taxM)}</span><span class="small faint">${money(taxAll)} all time</span></div>
     <div class="stat"><span class="k">Win rate</span><span class="v">${closedM.length ? Math.round((wins / closedM.length) * 100) + '%' : '—'}</span><span class="small faint">${wins} of ${closedM.length}</span></div>
-    <div class="stat hit"${best ? tip(esc(tradeName(best)), [['Profit', signed(tradePnl(best))]]) : ''}><span class="k">Best</span><span class="v">${best ? signed(tradePnl(best)) : '—'}</span><span class="small faint">${best ? esc(tradeName(best)) : ''}</span></div>
+    <div class="stat hit"${best ? tip(esc(tradeName(best)), [['Before tax', signed(tradePnl(best))], ['Tax', money(tradeTax(best))], ['Kept', signed(tradeNet(best))]]) : ''}><span class="k">Best</span><span class="v">${best ? signed(tradePnl(best)) : '—'}</span><span class="small faint">${best ? esc(tradeName(best)) : ''}</span></div>
     <div class="stat hit"${worst ? tip(esc(tradeName(worst)), [['Result', signed(tradePnl(worst))]]) : ''}><span class="k">Worst</span><span class="v ${worst && tradePnl(worst) < 0 ? 'neg' : ''}">${worst ? signed(tradePnl(worst)) : '—'}</span><span class="small faint">${worst ? esc(tradeName(worst)) : ''}</span></div>
     <div class="stat"><span class="k">Open positions</span><span class="v">${open.length}</span><span class="small faint">${money(open.reduce((a, t) => a + tradeCost(t), 0))} in</span></div>
-    <div class="stat"><span class="k">All-time realised</span><span class="v ${pnlAll < 0 ? 'neg' : ''}">${signed(pnlAll)}</span><span class="small faint">${allClosed.length} trades</span></div>
   </div>
-  <div class="sheet"><table><colgroup><col><col style="width:80px"><col style="width:70px"><col style="width:104px"><col style="width:104px"><col style="width:150px"><col style="width:116px"><col style="width:84px"><col style="width:120px"></colgroup>
-    <tr><th>Trade</th><th>Type</th><th class="r">Qty</th><th class="r">Buy</th><th class="r">Sell</th><th>Dates</th><th class="r">P / L</th><th class="r">Return</th><th></th></tr>
-    ${list.map(row).join('') || '<tr><td colspan="9" class="faint">No trades yet. Add one below — leave the closing price empty while it’s still open.</td></tr>'}
+  <div class="sheet"><table><colgroup><col><col style="width:80px"><col style="width:70px"><col style="width:104px"><col style="width:104px"><col style="width:150px"><col style="width:110px"><col style="width:96px"><col style="width:110px"><col style="width:76px"><col style="width:120px"></colgroup>
+    <tr><th>Trade</th><th>Type</th><th class="r">Qty</th><th class="r">Buy</th><th class="r">Sell</th><th>Dates</th><th class="r">P / L</th><th class="r">Tax</th><th class="r">Kept</th><th class="r">Return</th><th></th></tr>
+    ${list.map(row).join('') || '<tr><td colspan="11" class="faint">No trades yet. Add one below — leave the closing price empty while it’s still open.</td></tr>'}
   </table>
   <div class="addbar tradebar">
     <div class="seg bi"><button class="${f.kind !== 'option' ? 'on' : ''}" data-a="tSet" data-f="kind" data-v="stock">Stock</button><button class="${f.kind === 'option' ? 'on' : ''}" data-a="tSet" data-f="kind" data-v="option">Option</button></div>
@@ -1172,7 +1176,7 @@ function incomeView() {
   const by = (s) => sumAmt(inc.filter((x) => x.source === s));
   const pm = addMonths(mk, -1), pe = sumAmt(incomeIn(pm + '-01', pm + '-31'));
   const srcs = groupBy(inc, (x) => x.source);
-  const rows = inc.map((e, i) => `<tr${tip(esc(e.item || e.source), [['Amount', `<b>${signed(e.amount)}</b>`], ['Date', longDay(e.date)], ['Source', esc(e.source)], ['Share of the month', pctTxt(e.amount, earned)]], [], e.auto ? 'Added by your pay schedule' : e.trade ? 'From your Trades list — edit it there' : '')}><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item || '')}${e.auto ? ' <span class="faint small">· auto</span>' : ''}</td><td class="small">${esc(e.source)}</td><td class="mono r ${e.amount < 0 ? 'neg' : ''}">${signed(e.amount)}</td><td class="c">${e.trade ? '<span class="faint">—</span>' : `<button class="icon-btn" data-a="delInc" data-id="${e.id}" aria-label="Remove ${esc(e.item || e.source)}">${ic('x', 13)}</button>`}</td></tr>`).join('');
+  const rows = inc.map((e, i) => `<tr${tip(esc(e.item || e.source), [['Amount', `<b>${signed(e.amount)}</b>`], ...(e.trade ? [['Before tax', signed(e.gross)], ['Tax set aside', money(e.tax)]] : []), ['Date', longDay(e.date)], ['Source', esc(e.source)], ['Share of the month', pctTxt(e.amount, earned)]], [], e.auto ? 'Added by your pay schedule' : e.trade ? 'From your Trades list — edit it there' : '')}><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item || '')}${e.auto ? ' <span class="faint small">· auto</span>' : ''}</td><td class="small">${esc(e.source)}</td><td class="mono r ${e.amount < 0 ? 'neg' : ''}">${signed(e.amount)}</td><td class="c">${e.trade ? '<span class="faint">—</span>' : `<button class="icon-btn" data-a="delInc" data-id="${e.id}" aria-label="Remove ${esc(e.item || e.source)}">${ic('x', 13)}</button>`}</td></tr>`).join('');
   return `<div class="head"><div class="head-title"><span class="kicker">Money · Income</span><h1 class="h1">${monthLabel(mk).split(' ')[0]}</h1></div>${dateNav('sNav', 'This month')}</div>
   <div class="stats">
     <div class="stat hit"${tip('Earned · ' + monthLabel(mk), [['Total', `<b>${money(earned)}</b>`], [`${MON[+pm.slice(5) - 1]}`, money(pe)], ['Change', chg(earned, pe)], ['Entries', inc.length]])}><span class="k">Earned · ${MON[+mk.slice(5) - 1]}</span><span class="v">${money(earned)}</span><span class="small faint">${pe ? chg(earned, pe) + ' vs ' + MON[+pm.slice(5) - 1].slice(0, 3) : 'nothing logged last month'}</span></div>
@@ -1180,7 +1184,7 @@ function incomeView() {
     <div class="stat hit"${tip('Net', [['Earned', money(earned)], ['Spent', money(spent)], ['Left over', `<b>${signed(net)}</b>`]])}><span class="k">Net</span><span class="v ${net < 0 ? 'neg' : ''}">${signed(net)}</span></div>
     <div class="stat"><span class="k">Savings rate</span><span class="v">${earned > 0 ? Math.round((net / earned) * 100) + '%' : '—'}</span>${earned > 0 ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, (net / earned) * 100))}%"></i></div>` : ''}</div>
     <div class="stat"><span class="k">From salary</span><span class="v">${money(by('Salary'))}</span></div>
-    <div class="stat"><span class="k">From stocks</span><span class="v ${by('Stocks') < 0 ? 'neg' : ''}">${signed(by('Stocks'))}</span></div>
+    <div class="stat hit"${tip('From stocks · after tax', [['Kept', `<b>${signed(by('Stocks'))}</b>`], ['Tax set aside on trades', money(sumAmt(inc.filter((x) => x.trade).map((x) => ({ amount: x.tax }))))]])}><span class="k">From stocks · after tax</span><span class="v ${by('Stocks') < 0 ? 'neg' : ''}">${signed(by('Stocks'))}</span><span class="small faint">${money(sumAmt(inc.filter((x) => x.trade).map((x) => ({ amount: x.tax }))))} tax set aside</span></div>
   </div>
   <div class="dash">
     <section class="dcard span2"><div class="dh"><h2 class="h3">Earned vs spent</h2><span class="small faint">last 6 months · hover for details</span></div>${moneyBars(mk)}</section>
@@ -1300,8 +1304,8 @@ const BI_DS = {
   },
   trades: {
     label: 'Trades', fields: { symbol: 'Symbol', kind: 'Stock or option', side: 'Long or short', result: 'Win or loss' },
-    measures: { pnl: ['Profit / loss', 'money', 'sum'], count: ['Trades closed', 'int', 'sum'], wins: ['Winning trades', 'int', 'sum'] },
-    rows: (f, t) => (DB.trades || []).filter((x) => isClosed(x) && x.close >= f && x.close <= t).map((x) => { const p = tradePnl(x); return { date: x.close, symbol: x.symbol, kind: x.kind === 'option' ? 'Option' : 'Stock', side: x.side === 'short' ? 'Short' : 'Long', result: p > 0 ? 'Win' : p < 0 ? 'Loss' : 'Flat', pnl: p, count: 1, wins: p > 0 ? 1 : 0 }; })
+    measures: { net: ['Kept after tax', 'money', 'sum'], pnl: ['Profit before tax', 'money', 'sum'], tax: ['Tax set aside', 'money', 'sum'], count: ['Trades closed', 'int', 'sum'], wins: ['Winning trades', 'int', 'sum'] },
+    rows: (f, t) => (DB.trades || []).filter((x) => isClosed(x) && x.close >= f && x.close <= t).map((x) => { const p = tradePnl(x); return { date: x.close, symbol: x.symbol, kind: x.kind === 'option' ? 'Option' : 'Stock', side: x.side === 'short' ? 'Short' : 'Long', result: p > 0 ? 'Win' : p < 0 ? 'Loss' : 'Flat', pnl: p, tax: tradeTax(x), net: tradeNet(x), count: 1, wins: p > 0 ? 1 : 0 }; })
   },
   cash: {
     label: 'Cash flow', fields: { dir: 'In or out' },
@@ -1507,7 +1511,16 @@ function biStarter() {
 }
 function biPage() {
   if (!Array.isArray(DB.dashboards) || !DB.dashboards.length) { DB.dashboards = biStarter(); save(); }
+  biAddTaxTiles();
   return DB.dashboards.find((d) => d.id === ui.biPage) || DB.dashboards[0];
+}
+function biAddTaxTiles() {
+  if (DB.settings.biTaxTiles) return;
+  const P = (DB.dashboards || []).find((d) => d.id === 'd-spending') || (DB.dashboards || [])[0];
+  if (!P) return;
+  P.tiles.push(biT('Trades kept after tax', 'kpi', 'trades', 'net', { range: 'thisMonth' }), biT('Tax set aside on trades', 'kpi', 'trades', 'tax', { range: 'thisMonth' }), biT('Trades: kept vs tax by month', 'column', 'trades', 'tax', { by: 'month', range: 'thisYear', size: 2 }));
+  P.tiles[P.tiles.length - 1].title = 'Tax set aside by month';
+  DB.settings.biTaxTiles = true; save();
 }
 const biTile = (id) => { for (const d of DB.dashboards) { const t = d.tiles.find((x) => x.id === id); if (t) return { d, t }; } return {}; };
 function biValues(src, f) { return [...new Set(BI_DS[src].rows(biEarliest(), '9999-12-31').map((r) => String(r[f])))].sort(); }
@@ -1554,7 +1567,7 @@ VIEWS.settings = () => {
   const S = DB.settings;
   return `<div class="head"><div class="head-title"><span class="kicker">Settings</span><h1 class="h1">Preferences</h1></div></div>
   <div class="sheet" style="max-width:640px;padding:16px;display:flex;flex-direction:column;gap:14px">
-    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Deficit goal / day<input class="inp num" value="${S.deficitGoal ?? 500}" data-c="set" data-f="deficitGoal"></label><label class="fld">Workout days / week<input class="inp num" value="${S.workoutDaysGoal ?? 5}" data-c="set" data-f="workoutDaysGoal"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label></div>
+    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Deficit goal / day<input class="inp num" value="${S.deficitGoal ?? 500}" data-c="set" data-f="deficitGoal"></label><label class="fld">Workout days / week<input class="inp num" value="${S.workoutDaysGoal ?? 5}" data-c="set" data-f="workoutDaysGoal"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label><label class="fld">Trade tax %<input class="inp num" value="${S.tradeTax ?? 30}" data-c="set" data-f="tradeTax"></label></div>
     ${window.api ? `<label class="row-flex small"><input type="checkbox" id="loginChk" data-c="login"> Open Wellness when I log in (so alerts keep coming)</label>
     <div class="row-flex"><button class="btn" data-a="testNote">Send a test notification</button><span class="hint">If nothing shows, allow Wellness in System Settings → Notifications.</span></div>` : '<div class="hint">Running in a browser preview: notifications and open-at-login work in the Mac app.</div>'}
     ${window.api && window.api.updateInfo ? `<div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:10px">
