@@ -214,7 +214,8 @@ function showSyncStatus() {
 const ui = {
   view: 'today', date: todayKey(), open: null, planId: null, editDay: false,
   week: weekStart(todayKey()), month: monthKey(todayKey()), hDate: todayKey(), sMonth: monthKey(todayKey()),
-  logEx: null, logSets: null, ruleEx: null, ab: null, lastCard: undefined
+  logEx: null, logSets: null, ruleEx: null, ab: null, lastCard: undefined,
+  biPage: null, biEdit: false, biDraft: null, biEditId: null, biF: []
 };
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800); }
@@ -274,7 +275,7 @@ function choiceWarnings(day) {
 }
 
 // ---------- shell ----------
-const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', 'Log'], ['health', 'Health'], ['spending', 'Spending'], ['summary', 'Summary'], ['settings', 'Settings']];
+const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', 'Log'], ['health', 'Health'], ['spending', 'Spending'], ['summary', 'Dashboard'], ['settings', 'Settings']];
 function renderNav() {
   $('#nav').innerHTML = NAV.map(([k, l]) => `<button class="nav ${ui.view === k ? 'on' : ''}" data-a="go" data-v="${k}" ${ui.view === k ? 'aria-current="page"' : ''}>${ic(k, 17)}${l}</button>`).join('');
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1040,31 +1041,285 @@ function summarize(from, to) {
     workouts: DB.sessions.filter((s) => s.date >= from && s.date <= to).length
   };
 }
+// ---------- dashboard (the old Summary page): a small Power BI over everything tracked ----------
+// Data sets turn the app's records into flat rows with a date, some fields to group or filter by,
+// and numbers to measure. Tiles pick a data set, a measure, how to add it up, and what to group by.
+const dayDiff = (a, b) => Math.round((parseKey(b) - parseKey(a)) / 864e5);
+const exOf = (id) => DB.exercises.find((e) => e.id === id);
+const BI_DS = {
+  spending: {
+    label: 'Spending', fields: { category: 'Category', card: 'Card', item: 'Item' },
+    measures: { amount: ['Amount spent', 'money', 'sum'], count: ['Purchases', 'int', 'sum'] },
+    rows: (f, t) => expensesIn(f, t).map((e) => ({ date: e.date, category: e.category, card: cardOf(e), item: e.item, amount: e.amount, count: 1 }))
+  },
+  food: {
+    label: 'Food', fields: { meal: 'Meal', food: 'Food' },
+    measures: { cal: ['Calories', 'int', 'perday'], p: ['Protein (g)', 'g', 'perday'], c: ['Carbs (g)', 'g', 'perday'], fib: ['Fiber (g)', 'g', 'perday'], f: ['Fat (g)', 'g', 'perday'], count: ['Items eaten', 'int', 'sum'] },
+    rows: (f, t) => DB.foods.filter((x) => x.date >= f && x.date <= t).map((x) => ({ date: x.date, meal: x.meal || 'Other', food: x.name, cal: x.cal, p: x.p, c: x.c, fib: x.fib, f: x.f, count: 1 }))
+  },
+  days: {
+    label: 'Daily health', fields: { training: 'Day type', proteinOk: 'Protein goal', fiberOk: 'Fiber goal' },
+    measures: { deficit: ['Deficit', 'int', 'sum'], eaten: ['Calories eaten', 'int', 'avg'], burned: ['Calories burned', 'int', 'avg'], p: ['Protein (g)', 'g', 'avg'], fib: ['Fiber (g)', 'g', 'avg'], workout: ['Workout days', 'int', 'sum'], workoutKcal: ['Workout calories', 'int', 'sum'], proteinHit: ['Days protein goal hit', 'int', 'sum'], fiberHit: ['Days fiber goal hit', 'int', 'sum'] },
+    rows: (f, t) => {
+      const out = [], tk = todayKey(); if (t > tk) t = tk;
+      const wdays = new Set(DB.sessions.map((s) => s.date));
+      for (let k = f; k <= t; k = addDays(k, 1)) {
+        const ft = foodTotals(k), burn = DB.burns[k], w = wdays.has(k), tr = trainingOn(k).type;
+        if (!ft.n && burn == null && !w && !tr) continue;
+        const pOk = ft.n ? ft.p >= DB.settings.proteinTarget : null, fOk = ft.n ? ft.fib >= DB.settings.fiberTarget : null;
+        out.push({ date: k, training: tr === 'Abs' ? 'Ab day' : tr === 'Rest' ? 'Rest day' : tr || 'Not set', proteinOk: pOk == null ? 'No food logged' : pOk ? 'Hit' : 'Missed', fiberOk: fOk == null ? 'No food logged' : fOk ? 'Hit' : 'Missed',
+          deficit: ft.n && burn != null ? burn - ft.cal : null, eaten: ft.n ? ft.cal : null, burned: burn ?? null, p: ft.n ? ft.p : null, fib: ft.n ? ft.fib : null,
+          workout: w ? 1 : 0, workoutKcal: w ? workoutBurn(k).kcal : 0, proteinHit: pOk ? 1 : 0, fiberHit: fOk ? 1 : 0 });
+      }
+      return out;
+    }
+  },
+  workouts: {
+    label: 'Workouts', fields: { exercise: 'Exercise', group: 'Muscle group', kind: 'Type' },
+    measures: { sets: ['Sets', 'int', 'sum'], reps: ['Reps', 'int', 'sum'], volume: ['Volume (lb × reps)', 'int', 'sum'], top: ['Top weight (lb)', 'int', 'max'], done: ['Exercises done', 'int', 'sum'] },
+    rows: (f, t) => DB.sessions.filter((s) => s.date >= f && s.date <= t).map((s) => { const ex = exOf(s.exId) || {}; const bw = isBodyweight(ex);
+      return { date: s.date, exercise: ex.name || 'Removed exercise', group: ex.group || 'Other', kind: bw ? 'Bodyweight' : 'Weights', sets: s.sets.length,
+        reps: s.sets.reduce((a, x) => a + num(x.r) * (x.side ? 2 : 1), 0), volume: bw ? 0 : s.sets.reduce((a, x) => a + num(x.w) * num(x.r), 0), top: bw ? null : Math.max(0, ...s.sets.map((x) => num(x.w))), done: 1 }; })
+  },
+  routine: {
+    label: 'Routine', fields: { plan: 'Plan' },
+    measures: { score: ['Day score (%)', 'pct', 'avg'], done: ['Blocks done', 'int', 'sum'], total: ['Blocks planned', 'int', 'sum'], days: ['Days planned', 'int', 'sum'] },
+    rows: (f, t) => Object.keys(DB.days).filter((k) => k >= f && k <= t && k <= todayKey()).map((k) => { const s = dayScore(DB.days[k]) || { done: 0, total: 0, pct: 0 }; return { date: k, plan: DB.days[k].planName || 'Custom day', score: s.total ? s.pct : null, done: s.done, total: s.total, days: 1 }; })
+  },
+  picks: {
+    label: 'Free-time picks', fields: { list: 'Choice list', pick: 'Pick' },
+    measures: { count: ['Times picked', 'int', 'sum'] },
+    rows: (f, t) => { const out = []; Object.keys(DB.days).filter((k) => k >= f && k <= t).forEach((k) => { const d = DB.days[k]; d.blocks.forEach((b) => { const v = d.choices && d.choices[b.id]; if (b.kind === 'choice' && v) { const L = listById(b.listId); out.push({ date: k, list: L ? L.name : 'Other', pick: v, count: 1 }); } }); }); return out; }
+  }
+};
+const BI_AGG = { sum: 'Total', avg: 'Average per entry', perday: 'Average per day', max: 'Highest', min: 'Lowest', days: 'Number of days' };
+const BI_TIME = { day: 'Day', week: 'Week', month: 'Month', weekday: 'Day of week' };
+const BI_VIS = [['kpi', 'Number'], ['column', 'Columns'], ['line', 'Line'], ['bar', 'Bars'], ['donut', 'Donut'], ['table', 'Table']];
+const BI_RANGES = { thisWeek: 'This week', lastWeek: 'Last week', last7: 'Last 7 days', thisMonth: 'This month', lastMonth: 'Last month', last30: 'Last 30 days', last90: 'Last 90 days', thisYear: 'This year', all: 'All time' };
+const BI_SIZES = [['1', 'S'], ['2', 'M'], ['3', 'L'], ['4', 'Full']];
+
+function biEarliest() {
+  const ds = [...DB.expenses.map((e) => e.date), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
+  return ds.length ? ds.reduce((a, b) => (a < b ? a : b)) : todayKey();
+}
+function biRange(p) {
+  const tk = todayKey(), ws = weekStart(tk), mk = monthKey(tk), lm = addMonths(mk, -1), y = tk.slice(0, 4);
+  const r = { thisWeek: [ws, addDays(ws, 6)], lastWeek: [addDays(ws, -7), addDays(ws, -1)], last7: [addDays(tk, -6), tk], thisMonth: [mk + '-01', mk + '-' + daysIn(mk)],
+    lastMonth: [lm + '-01', lm + '-' + daysIn(lm)], last30: [addDays(tk, -29), tk], last90: [addDays(tk, -89), tk], thisYear: [y + '-01-01', y + '-12-31'], all: [biEarliest(), tk] }[p] || [mk + '-01', mk + '-' + daysIn(mk)];
+  const end = r[1] < tk ? r[1] : tk, len = Math.max(1, dayDiff(r[0], end) + 1);
+  return { from: r[0], to: r[1], end, len, prev: [addDays(r[0], -len), addDays(r[0], -1)], label: BI_RANGES[p] || p };
+}
+const biFmt = (v, f) => (v == null || !isFinite(v) ? '—' : f === 'money' ? money(v) : f === 'pct' ? Math.round(v) + '%' : f === 'g' ? r1(v).toLocaleString('en-US') : Math.round(v).toLocaleString('en-US'));
+const biShort = (v, f) => (f === 'money' ? moneyShort(v) : Math.abs(v) >= 10000 ? Math.round(v / 1000) + 'k' : Math.abs(v) >= 1000 ? r1(v / 1000) + 'k' : f === 'g' ? r1(v) : Math.round(v)) + (f === 'pct' ? '%' : '');
+function biAgg(rows, m, agg) {
+  if (agg === 'days') return new Set(rows.map((r) => r.date)).size;
+  const v = rows.map((r) => r[m]).filter((x) => x != null && isFinite(x));
+  if (!v.length) return agg === 'sum' ? 0 : null;
+  const s = v.reduce((a, b) => a + b, 0);
+  if (agg === 'sum') return s;
+  if (agg === 'avg') return s / v.length;
+  if (agg === 'perday') return s / new Set(rows.filter((r) => r[m] != null).map((r) => r.date)).size;
+  if (agg === 'max') return Math.max(...v);
+  if (agg === 'min') return Math.min(...v);
+  return s;
+}
+function biTimeKey(k, by) { return by === 'week' ? weekStart(k) : by === 'month' ? monthKey(k) : by === 'weekday' ? String((parseKey(k).getDay() + 6) % 7) : k; }
+function biTimeLabel(key, by, long) {
+  if (by === 'weekday') return DOW[(+key + 1) % 7].slice(0, long ? 9 : 3);
+  if (by === 'month') return long ? monthLabel(key) : MON[+key.slice(5) - 1].slice(0, 3);
+  const d = parseKey(key), s = MON[d.getMonth()].slice(0, 3) + ' ' + d.getDate();
+  return by === 'week' ? (long ? 'Week of ' + s : s) : long ? longDay(key) : s;
+}
+// The rows a tile sees: its data set over its date range, its own filter, then the page's click filters.
+function biRows(t, R) {
+  const ds = BI_DS[t.src]; if (!ds) return [];
+  let rows = ds.rows(R.from < biEarliest() ? biEarliest() : R.from, R.to);
+  if (t.ff && t.fv) rows = rows.filter((r) => String(r[t.ff]) === t.fv);
+  (ui.biF || []).forEach((f) => { if (f.f in ds.fields) rows = rows.filter((r) => String(r[f.f]) === f.v); });
+  return rows;
+}
+function biTileRange(t) { return biRange(t.range && t.range !== 'page' ? t.range : biPage().range || 'thisMonth'); }
+function biCompute(t) {
+  const ds = BI_DS[t.src], R = biTileRange(t), rows = biRows(t, R);
+  const mdef = ds.measures[t.m] || Object.values(ds.measures)[0], agg = t.agg || mdef[2], fmt = mdef[1];
+  const total = biAgg(rows, t.m, agg);
+  if (!t.by || t.by === 'none') return { R, rows, total, fmt, agg, mlabel: mdef[0] };
+  const isTime = t.by in BI_TIME, groups = new Map();
+  rows.forEach((r) => { const k = isTime ? biTimeKey(r.date, t.by) : String(r[t.by]); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  if (isTime && t.by !== 'weekday') { // show empty periods too, so gaps are visible
+    const start = R.from < biEarliest() ? biEarliest() : R.from;
+    for (let k = start; k <= R.end; k = addDays(k, 1)) { const g = biTimeKey(k, t.by); if (!groups.has(g)) groups.set(g, []); }
+  }
+  if (t.by === 'weekday') for (let i = 0; i < 7; i++) if (!groups.has(String(i))) groups.set(String(i), []);
+  let list = [...groups.entries()].map(([k, rs]) => ({ key: k, label: isTime ? biTimeLabel(k, t.by) : k, long: isTime ? biTimeLabel(k, t.by, true) : k, rows: rs, v: biAgg(rs, t.m, agg) }));
+  if (isTime) list.sort((a, b) => (t.by === 'weekday' ? +a.key - +b.key : a.key < b.key ? -1 : 1));
+  else { list.sort((a, b) => (b.v ?? -Infinity) - (a.v ?? -Infinity)); const n = +t.top || 0; if (n && list.length > n) { const rest = list.slice(n); list = list.slice(0, n); if (t.vis === 'donut') list.push({ key: '__other', label: 'Other', long: `Other (${rest.length})`, rows: rest.flatMap((x) => x.rows), v: biAgg(rest.flatMap((x) => x.rows), t.m, agg) }); } }
+  return { R, rows, total, fmt, agg, mlabel: mdef[0], list, isTime };
+}
+// Goal lines for measures that have one in Settings.
+function biGoal(t, R) {
+  if (t.target === 'goal') {
+    if (t.src === 'days' && t.m === 'deficit' && (t.agg || 'sum') === 'sum') { const ws = weekStart(todayKey()); return R.from === ws && R.len <= 7 ? weekGoal(ws).goal : (num(DB.settings.deficitGoal) || 500) * R.len; }
+    if (t.src === 'days' && t.m === 'workout') return Math.round((num(DB.settings.workoutDaysGoal) || 5) * Math.max(1, Math.round(dayDiff(R.from, R.to) + 1) / 7));
+    if (t.m === 'p') return DB.settings.proteinTarget;
+    if (t.m === 'fib') return DB.settings.fiberTarget;
+    return null;
+  }
+  return t.target != null && t.target !== '' ? num(t.target) : null;
+}
+// A goal line inside a grouped chart only makes sense for per-day goals (protein, fiber) or a custom number.
+function biLineGoal(t, c) { if (t.target === 'goal' && t.src === 'days' && (t.m === 'deficit' || t.m === 'workout')) return null; if (t.target === 'goal' && c.agg === 'sum' && t.by !== 'day') return null; return biGoal(t, c.R); }
+function biTipFor(t, c, g) {
+  const share = c.total && (c.agg === 'sum') ? ` <span class="tt-m">· ${pctTxt(g.v || 0, c.list.reduce((a, x) => a + (x.v || 0), 0))}</span>` : '';
+  const vals = c.list.map((x) => x.v).filter((v) => v != null), avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  const rows = [[esc(c.mlabel) + ` <span class="tt-m">(${BI_AGG[c.agg].toLowerCase()})</span>`, `<b>${biFmt(g.v, c.fmt)}</b>${share}`], ['Entries', g.rows.length], ['vs average', avg ? chg(g.v || 0, avg) : '—']];
+  const ds = BI_DS[t.src], other = Object.keys(ds.fields).find((f) => f !== t.by && f !== 'item' && f !== 'food');
+  const secs = [];
+  if (other && g.rows.length) secs.push([`By ${ds.fields[other].toLowerCase()}`, groupBy(g.rows.map((r) => ({ ...r, amount: r[t.m] ?? 0 })), (r) => r[other]).slice(0, 4).map((x) => [esc(x[0]), biFmt(x[1], c.fmt)])]);
+  return tip(esc(g.long), rows, secs, !c.isTime && g.key !== '__other' ? 'Click to filter the whole page' : '');
+}
+const biClick = (t, g, c) => (!c.isTime && g.key !== '__other' ? ` data-a="biF" data-f="${esc(t.by)}" data-v="${esc(g.key)}"` : '');
+const biSel = (t, g) => (ui.biF || []).some((f) => f.f === t.by && f.v === g.key);
+
+function biColumn(t, c, W, H) {
+  const L = 44, R = 8, T = 10, B = 24, pw = W - L - R, ph = H - T - B, n = c.list.length || 1;
+  const goal = biLineGoal(t, c), vmax = Math.max(0, ...c.list.map((g) => g.v || 0), goal || 0), vmin = Math.min(0, ...c.list.map((g) => g.v || 0));
+  const max = niceMax(vmax), min = vmin < 0 ? -niceMax(-vmin) : 0, Y = (v) => T + ((max - v) / (max - min)) * ph, slot = pw / n, bw = Math.max(2, Math.min(36, slot * 0.72));
+  const grid = [min, min < 0 ? 0 : (max + min) / 2, max].map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="cg"/><text x="${L - 6}" y="${Y(v) + 3.5}" class="ct" text-anchor="end">${biShort(v, c.fmt)}</text>`).join('');
+  const every = Math.ceil(n / Math.max(1, Math.floor(pw / 42)));
+  const bars = c.list.map((g, i) => { const v = g.v || 0, x = L + i * slot + (slot - bw) / 2, y0 = Y(0), y1 = Y(v), h = Math.abs(y1 - y0), r = Math.min(3, bw / 2, h);
+    const d = !v ? '' : v > 0 ? `M${x},${y0} V${y1 + r} q0,-${r} ${r},-${r} H${x + bw - r} q${r},0 ${r},${r} V${y0} z` : `M${x},${y0} V${y1 - r} q0,${r} ${r},${r} H${x + bw - r} q${r},0 ${r},-${r} V${y0} z`;
+    return `<g class="hit${biSel(t, g) ? ' sel' : ''}"${biClick(t, g, c)}${biTipFor(t, c, g)}><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>${d ? `<path d="${d}" class="cb${v < 0 ? ' neg' : ''}"/>` : ''}${i % every === 0 ? `<text x="${L + i * slot + slot / 2}" y="${H - 7}" class="ct" text-anchor="middle">${esc(String(g.label).slice(0, 10))}</text>` : ''}</g>`; }).join('');
+  const gl = goal != null ? `<line x1="${L}" x2="${W - R}" y1="${Y(goal)}" y2="${Y(goal)}" class="cgoal"/><text x="${W - R}" y="${Y(goal) - 4}" class="ct" text-anchor="end">goal ${biShort(goal, c.fmt)}</text>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart">${grid}${bars}${gl}</svg>`;
+}
+function biLine(t, c, W, H) {
+  const L = 44, R = 10, T = 12, B = 24, pw = W - L - R, ph = H - T - B, n = c.list.length;
+  const pts = c.list.map((g) => g.v), vals = pts.filter((v) => v != null), goal = biLineGoal(t, c);
+  const max = niceMax(Math.max(0, ...vals, goal || 0)), min = Math.min(0, ...vals) < 0 ? -niceMax(-Math.min(...vals)) : 0;
+  const X = (i) => L + (n > 1 ? (i / (n - 1)) * pw : pw / 2), Y = (v) => T + ((max - v) / (max - min)) * ph;
+  let d = '', pen = false; pts.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`; pen = true; });
+  const grid = [min, (max + min) / 2, max].map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="cg"/><text x="${L - 6}" y="${Y(v) + 3.5}" class="ct" text-anchor="end">${biShort(v, c.fmt)}</text>`).join('');
+  const every = Math.ceil(n / Math.max(1, Math.floor(pw / 46)));
+  const hits = c.list.map((g, i) => `<g class="hit vline"${biTipFor(t, c, g)}><rect x="${X(i) - pw / Math.max(1, n - 1) / 2}" y="${T}" width="${pw / Math.max(1, n - 1)}" height="${ph}" fill="transparent"/><line x1="${X(i)}" x2="${X(i)}" y1="${T}" y2="${T + ph}" class="cx"/>${g.v != null ? `<circle cx="${X(i)}" cy="${Y(g.v)}" r="4" class="cdot"/>` : ''}${i % every === 0 ? `<text x="${X(i)}" y="${H - 7}" class="ct" text-anchor="middle" style="opacity:1">${esc(String(g.label))}</text>` : ''}</g>`).join('');
+  const gl = goal != null ? `<line x1="${L}" x2="${W - R}" y1="${Y(goal)}" y2="${Y(goal)}" class="cgoal"/><text x="${W - R}" y="${Y(goal) - 4}" class="ct" text-anchor="end">goal ${biShort(goal, c.fmt)}</text>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart">${grid}${gl}<path d="${d}" class="cl"/>${hits}</svg>`;
+}
+function biBars(t, c) {
+  const list = c.list.filter((g) => g.v != null); if (!list.length) return '<div class="faint small">Nothing in this range.</div>';
+  const max = Math.max(...list.map((g) => Math.abs(g.v))) || 1, sum = list.reduce((a, g) => a + (g.v || 0), 0);
+  return `<div class="hbars">${list.map((g) => `<div class="hb hit${biSel(t, g) ? ' sel' : ''}"${biClick(t, g, c)}${biTipFor(t, c, g)}><div class="hb-top"><span class="hb-name">${esc(g.long)}</span><span class="mono hb-val">${biFmt(g.v, c.fmt)}${c.agg === 'sum' && sum ? `<span class="faint"> · ${pctTxt(g.v, sum)}</span>` : ''}</span></div><div class="hb-track"><i style="width:${Math.max(2, (Math.abs(g.v) / max) * 100)}%"></i></div></div>`).join('')}</div>`;
+}
+function biDonut(t, c) {
+  const list = c.list.filter((g) => (g.v || 0) > 0).slice(0, 7), sum = list.reduce((a, g) => a + g.v, 0);
+  if (!sum) return '<div class="faint small">Nothing in this range.</div>';
+  const R0 = 70, R1 = 44, cx = 80, cy = 80; let a0 = -Math.PI / 2;
+  const arcs = list.map((g, i) => { const a1 = a0 + (g.v / sum) * Math.PI * 2 - (list.length > 1 ? 0.02 : 0), big = a1 - a0 > Math.PI ? 1 : 0;
+    const p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`;
+    const d = list.length === 1 ? `M${cx - R0},${cy} a${R0},${R0} 0 1 0 ${R0 * 2},0 a${R0},${R0} 0 1 0 -${R0 * 2},0 M${cx - R1},${cy} a${R1},${R1} 0 1 1 ${R1 * 2},0 a${R1},${R1} 0 1 1 -${R1 * 2},0` : `M${p(R0, a0)} A${R0},${R0} 0 ${big} 1 ${p(R0, a1)} L${p(R1, a1)} A${R1},${R1} 0 ${big} 0 ${p(R1, a0)} z`;
+    a0 = a1 + (list.length > 1 ? 0.02 : 0);
+    return `<path d="${d}" class="hit sl ${g.key === '__other' ? 's0' : 's' + (i + 1)}${biSel(t, g) ? ' sel' : ''}" fill-rule="evenodd"${biClick(t, g, c)}${biTipFor(t, c, g)}/>`; }).join('');
+  return `<div class="donut"><svg viewBox="0 0 160 160" class="chart">${arcs}<text x="80" y="78" text-anchor="middle" class="dv">${biShort(sum, c.fmt)}</text><text x="80" y="94" text-anchor="middle" class="ct">${c.agg === 'sum' ? 'total' : 'combined'}</text></svg>
+    <div class="dleg">${list.map((g, i) => `<div class="hit${biSel(t, g) ? ' sel' : ''}"${biClick(t, g, c)}${biTipFor(t, c, g)}><i class="${g.key === '__other' ? 's0' : 's' + (i + 1)}"></i><span class="hb-name">${esc(g.long)}</span><span class="mono">${biFmt(g.v, c.fmt)}</span><span class="mono faint">${pctTxt(g.v, sum)}</span></div>`).join('')}</div></div>`;
+}
+function biTable(t, c) {
+  if (!c.list.length) return '<div class="faint small">Nothing in this range.</div>';
+  const sum = c.list.reduce((a, g) => a + (g.v || 0), 0), by = t.by in BI_TIME ? BI_TIME[t.by] : BI_DS[t.src].fields[t.by];
+  return `<div class="bitable"><table><tr><th>${esc(by)}</th><th class="r">${esc(c.mlabel)}</th>${c.agg === 'sum' ? '<th class="r">Share</th>' : ''}<th class="r">Entries</th></tr>
+    ${c.list.map((g) => `<tr class="hit${biSel(t, g) ? ' sel' : ''}"${biClick(t, g, c)}${biTipFor(t, c, g)}><td>${esc(g.long)}</td><td class="mono r">${biFmt(g.v, c.fmt)}</td>${c.agg === 'sum' ? `<td class="mono r faint">${pctTxt(g.v || 0, sum)}</td>` : ''}<td class="mono r faint">${g.rows.length}</td></tr>`).join('')}
+    ${c.agg === 'sum' ? `<tr class="tot"><td>Total</td><td class="mono r">${biFmt(sum, c.fmt)}</td><td></td><td class="mono r">${c.rows.length}</td></tr>` : ''}</table></div>`;
+}
+function biKpi(t, c) {
+  const prevRows = (() => { const ds = BI_DS[t.src]; let r = ds.rows(c.R.prev[0], c.R.prev[1]); if (t.ff && t.fv) r = r.filter((x) => String(x[t.ff]) === t.fv); (ui.biF || []).forEach((f) => { if (f.f in ds.fields) r = r.filter((x) => String(x[f.f]) === f.v); }); return r; })();
+  const prev = biAgg(prevRows, t.m, c.agg), goal = biGoal(t, c.R);
+  let spark = '';
+  if (c.R.len <= 120 && c.R.len > 1) { const days = []; for (let k = c.R.from < biEarliest() ? biEarliest() : c.R.from; k <= c.R.end; k = addDays(k, 1)) days.push(biAgg(c.rows.filter((r) => r.date === k), t.m, c.agg === 'perday' ? 'sum' : c.agg)); const vs = days.map((v) => v || 0), mx = Math.max(1, ...vs.map(Math.abs));
+    if (days.length > 1) spark = `<svg viewBox="0 0 200 36" class="spark" preserveAspectRatio="none"><path d="${vs.map((v, i) => `${i ? 'L' : 'M'}${((i / (vs.length - 1)) * 200).toFixed(1)},${(33 - (Math.max(0, v) / mx) * 30).toFixed(1)}`).join('')}" /></svg>`; }
+  const p = goal ? Math.max(0, Math.min(100, pct(c.total || 0, goal))) : null;
+  const t2 = tip(esc(t.title || c.mlabel), [[c.R.label, `<b>${biFmt(c.total, c.fmt)}</b>`], ['Previous period', biFmt(prev, c.fmt)], ['Change', chg(c.total || 0, prev || 0)], ...(goal != null ? [['Goal', biFmt(goal, c.fmt)], ['Progress', p + '%']] : []), ['Entries', c.rows.length]]);
+  return `<div class="kpi hit"${t2}><div class="kv mono">${biFmt(c.total, c.fmt)}</div><div class="kc small"><span class="${prev == null ? 'faint' : ''}">${prev == null ? 'no data before' : chg(c.total || 0, prev) + ' vs previous'}</span>${goal != null ? `<span class="faint"> · goal ${biFmt(goal, c.fmt)}</span>` : ''}</div>${goal != null ? `<div class="bar"><i style="width:${p}%"></i></div>` : ''}${spark}</div>`;
+}
+function biTileBody(t) {
+  const c = biCompute(t), size = +t.size || 1, W = [0, 300, 620, 940, 1260][size], H = t.vis === 'kpi' ? 0 : 210;
+  if (t.vis === 'kpi' || !t.by || t.by === 'none') return biKpi(t, c);
+  if (t.vis === 'column') return biColumn(t, c, W, H);
+  if (t.vis === 'line') return biLine(t, c, W, H);
+  if (t.vis === 'bar') return biBars(t, c);
+  if (t.vis === 'donut') return biDonut(t, c);
+  return biTable(t, c);
+}
+function biTileHTML(t, editing, preview) {
+  const ds = BI_DS[t.src] || {}, m = (ds.measures || {})[t.m] || ['', '', ''], R = biTileRange(t);
+  const sub = [m[0] ? `${BI_AGG[t.agg || m[2]]} ${m[0].toLowerCase()}` : '', t.by && t.by !== 'none' ? 'by ' + (BI_TIME[t.by] || ds.fields[t.by] || '').toLowerCase() : '', t.range && t.range !== 'page' ? R.label.toLowerCase() : '', t.ff && t.fv ? `${t.fv} only` : ''].filter(Boolean).join(' · ');
+  const tools = editing && !preview ? `<div class="ttools"><button class="icon-btn" data-a="biMove" data-id="${t.id}" data-d="-1" aria-label="Move left">${ic('left', 13)}</button><button class="icon-btn" data-a="biMove" data-id="${t.id}" data-d="1" aria-label="Move right">${ic('right', 13)}</button><button class="btn sm" data-a="biEditTile" data-id="${t.id}">Edit</button><button class="btn sm" data-a="biDup" data-id="${t.id}">Copy</button><button class="icon-btn" data-a="biDel" data-id="${t.id}" aria-label="Delete tile">${ic('x', 13)}</button></div>` : '';
+  return `<section class="dcard bt z${preview ? 2 : +t.size || 1}${editing && !preview ? ' editing' : ''}">${tools}<div class="dh"><div><h2 class="h3">${esc(t.title || m[0] || 'New tile')}</h2><div class="small faint">${esc(sub)}</div></div></div>${biTileBody(t)}</section>`;
+}
+
+// Starter pages, made once. Everything can be edited, moved or deleted.
+let biN = 0;
+const biT = (title, vis, src, m, o = {}) => ({ id: 't' + Date.now().toString(36) + (biN++), title, vis, src, m, by: o.by || 'none', agg: o.agg || '', size: String(o.size || (vis === 'kpi' ? 1 : 2)), top: o.top || '', range: o.range || 'page', target: o.target ?? '', ff: '', fv: '' });
+function biStarter() {
+  return [
+    { id: 'd-overview', name: 'Overview', range: 'thisWeek', tiles: [
+      biT('Deficit', 'kpi', 'days', 'deficit', { target: 'goal' }), biT('Workout days', 'kpi', 'days', 'workout', { target: 'goal' }), biT('Protein per day', 'kpi', 'food', 'p', { target: 'goal' }), biT('Spent', 'kpi', 'spending', 'amount'),
+      biT('Deficit by day', 'column', 'days', 'deficit', { by: 'day', range: 'last30', size: 2 }), biT('Spending by category', 'bar', 'spending', 'amount', { by: 'category', range: 'thisMonth', size: 2 }),
+      biT('Calories by meal', 'donut', 'food', 'cal', { by: 'meal', agg: 'sum', size: 2 }), biT('Day score', 'line', 'routine', 'score', { by: 'day', range: 'last30', size: 2 })] },
+    { id: 'd-spending', name: 'Spending', range: 'thisMonth', tiles: [
+      biT('Spent', 'kpi', 'spending', 'amount'), biT('Purchases', 'kpi', 'spending', 'count'), biT('Average purchase', 'kpi', 'spending', 'amount', { agg: 'avg' }), biT('Biggest purchase', 'kpi', 'spending', 'amount', { agg: 'max' }),
+      biT('Spending by day', 'column', 'spending', 'amount', { by: 'day', size: 4 }), biT('By category', 'bar', 'spending', 'amount', { by: 'category', size: 2 }), biT('By card', 'donut', 'spending', 'amount', { by: 'card', size: 2 }),
+      biT('By month', 'column', 'spending', 'amount', { by: 'month', range: 'thisYear', size: 2 }), biT('Top items', 'table', 'spending', 'amount', { by: 'item', top: 10, size: 2 })] },
+    { id: 'd-health', name: 'Health', range: 'last30', tiles: [
+      biT('Calories per day', 'kpi', 'food', 'cal'), biT('Protein per day', 'kpi', 'food', 'p', { target: 'goal' }), biT('Fiber per day', 'kpi', 'food', 'fib', { target: 'goal' }), biT('Total deficit', 'kpi', 'days', 'deficit'),
+      biT('Deficit by week', 'column', 'days', 'deficit', { by: 'week', size: 2 }), biT('Protein by day', 'line', 'food', 'p', { by: 'day', agg: 'sum', target: 'goal', size: 2 }),
+      biT('Top foods by calories', 'bar', 'food', 'cal', { by: 'food', agg: 'sum', top: 8, size: 2 }), biT('Fiber by day', 'column', 'food', 'fib', { by: 'day', agg: 'sum', target: 'goal', size: 2 }),
+      biT('Sets by muscle group', 'donut', 'workouts', 'sets', { by: 'group', size: 2 }), biT('Best lifts', 'table', 'workouts', 'top', { by: 'exercise', size: 2 })] },
+    { id: 'd-routine', name: 'Routine', range: 'last30', tiles: [
+      biT('Average day score', 'kpi', 'routine', 'score'), biT('Days planned', 'kpi', 'routine', 'days'), biT('Blocks done', 'kpi', 'routine', 'done'), biT('Workout days', 'kpi', 'days', 'workout', { target: 'goal' }),
+      biT('Score by day of week', 'column', 'routine', 'score', { by: 'weekday', size: 2 }), biT('Free-time picks', 'bar', 'picks', 'count', { by: 'pick', size: 2 })] }
+  ];
+}
+function biPage() {
+  if (!Array.isArray(DB.dashboards) || !DB.dashboards.length) { DB.dashboards = biStarter(); save(); }
+  return DB.dashboards.find((d) => d.id === ui.biPage) || DB.dashboards[0];
+}
+const biTile = (id) => { for (const d of DB.dashboards) { const t = d.tiles.find((x) => x.id === id); if (t) return { d, t }; } return {}; };
+function biValues(src, f) { return [...new Set(BI_DS[src].rows(biEarliest(), '9999-12-31').map((r) => String(r[f])))].sort(); }
+
+function biEditor() {
+  const t = ui.biDraft, ds = BI_DS[t.src], mdef = ds.measures[t.m] || ['', '', 'sum'];
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(l)}</option>`;
+  const seg = (name, list, cur) => `<div class="seg bi">${list.map(([v, l]) => `<button class="${String(cur) === v ? 'on' : ''}" data-a="biSet" data-f="${name}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  return `<div class="bieditor"><div class="bie-form">
+    <div class="row-flex"><h2 class="h3" style="flex:1">${ui.biEditId === 'new' ? 'New tile' : 'Edit tile'}</h2><button class="btn" data-a="biCancel">Cancel</button><button class="btn primary" data-a="biSave">${ui.biEditId === 'new' ? 'Add to page' : 'Save'}</button></div>
+    <label class="fld">Title<input class="inp" value="${esc(t.title)}" placeholder="${esc(mdef[0])}" data-c="biIn" data-f="title"></label>
+    <label class="fld">Visual${seg('vis', BI_VIS, t.vis)}</label>
+    <div class="bie-grid">
+      <label class="fld">Data<select class="sel" data-c="biIn" data-f="src">${Object.entries(BI_DS).map(([k, d]) => opt(k, d.label, t.src)).join('')}</select></label>
+      <label class="fld">Measure<select class="sel" data-c="biIn" data-f="m">${Object.entries(ds.measures).map(([k, d]) => opt(k, d[0], t.m)).join('')}</select></label>
+      <label class="fld">Add it up as<select class="sel" data-c="biIn" data-f="agg">${opt('', 'Default (' + BI_AGG[mdef[2]].toLowerCase() + ')', t.agg)}${Object.entries(BI_AGG).map(([k, l]) => opt(k, l, t.agg)).join('')}</select></label>
+      <label class="fld">Group by<select class="sel" data-c="biIn" data-f="by">${opt('none', t.vis === 'kpi' ? 'Nothing (one number)' : 'Nothing', t.by)}<optgroup label="Time">${Object.entries(BI_TIME).map(([k, l]) => opt(k, l, t.by)).join('')}</optgroup><optgroup label="${esc(ds.label)}">${Object.entries(ds.fields).map(([k, l]) => opt(k, l, t.by)).join('')}</optgroup></select></label>
+      <label class="fld">Date range<select class="sel" data-c="biIn" data-f="range">${opt('page', 'Same as page', t.range)}${Object.entries(BI_RANGES).map(([k, l]) => opt(k, l, t.range)).join('')}</select></label>
+      <label class="fld">Show top<input class="inp num" value="${esc(t.top)}" placeholder="all" data-c="biIn" data-f="top"></label>
+      <label class="fld">Only where<select class="sel" data-c="biIn" data-f="ff">${opt('', 'No filter', t.ff)}${Object.entries(ds.fields).map(([k, l]) => opt(k, l, t.ff)).join('')}</select></label>
+      ${t.ff ? `<label class="fld">is<select class="sel" data-c="biIn" data-f="fv">${opt('', 'Pick…', t.fv)}${biValues(t.src, t.ff).map((v) => opt(v, v, t.fv)).join('')}</select></label>` : ''}
+      <label class="fld">Goal<select class="sel" data-c="biIn" data-f="target">${opt('', 'None', t.target)}${opt('goal', 'From Settings', t.target)}${t.target !== '' && t.target !== 'goal' ? opt(t.target, t.target, t.target) : ''}</select></label>
+      <label class="fld">Custom goal<input class="inp num" value="${t.target !== 'goal' ? esc(t.target) : ''}" placeholder="—" data-c="biIn" data-f="target"></label>
+    </div>
+    <label class="fld">Size${seg('size', BI_SIZES, t.size)}</label>
+  </div><div class="bie-prev"><div class="small faint" style="margin-bottom:6px">Preview</div>${biTileHTML(t, false, true)}</div></div>`;
+}
+
 VIEWS.summary = () => {
-  const tk = todayKey(), ws = weekStart(tk), ms = monthKey(tk) + '-01';
-  const W = summarize(ws, addDays(ws, 6)), M = summarize(ms, monthKey(tk) + '-31');
-  const WG = weekGoal(ws), WD = weekDeficit(ws), WW = weekWorkouts(ws);
-  const row = (label, a, b) => `<tr><td>${label}</td><td class="mono r">${a ?? '—'}</td><td class="mono r">${b ?? '—'}</td></tr>`;
-  const sec = (t) => `<tr class="sec"><td colspan="3">${t}</td></tr>`;
-  const f0 = (v) => (v == null ? '—' : Math.round(v));
-  const lists = new Set([...Object.keys(W.picks), ...Object.keys(M.picks)]);
-  let pickRows = '';
-  lists.forEach((ln) => {
-    pickRows += sec(esc(ln));
-    const opts = new Set([...Object.keys(W.picks[ln] || {}), ...Object.keys(M.picks[ln] || {})]);
-    [...opts].sort((a, b) => ((M.picks[ln] || {})[b] || 0) - ((M.picks[ln] || {})[a] || 0)).forEach((o) => { pickRows += row(esc(o), (W.picks[ln] || {})[o] || 0, (M.picks[ln] || {})[o] || 0); });
-  });
-  const cats = new Set([...Object.keys(W.cats), ...Object.keys(M.cats)]);
-  return `<div class="head"><div class="head-title"><span class="kicker">Summary · so far</span><h1 class="h1">How it’s going</h1></div></div>
-  <div class="stats"><div class="stat"><span class="k">Avg score · this week</span><span class="v" style="color:var(--accT)">${W.avgScore ?? '—'}${W.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Avg score · ${MON[parseKey(tk).getMonth()]}</span><span class="v" style="color:var(--accT)">${M.avgScore ?? '—'}${M.avgScore != null ? '%' : ''}</span></div><div class="stat"><span class="k">Spent · this week</span><span class="v">${money(W.spend)}</span></div><div class="stat"><span class="k">Spent · ${MON[parseKey(tk).getMonth()]}</span><span class="v">${money(M.spend)}</span></div><div class="stat"><span class="k">Deficit · goal ${WG.goal.toLocaleString('en-US')}</span><span class="v">${WD.def.toLocaleString('en-US')}</span><div class="bar"><i style="width:${Math.min(100, Math.max(0, pct(WD.def, WG.goal)))}%"></i></div></div><div class="stat"><span class="k">Workout days · this week</span><span class="v">${WW.done} / ${WW.goal}</span><div class="bar alt"><i style="width:${Math.min(100, pct(WW.done, WW.goal))}%"></i></div></div></div>
-  <div class="sheet" style="max-width:760px"><table><colgroup><col><col style="width:140px"><col style="width:140px"></colgroup>
-    <tr><th>Metric</th><th class="r">This week</th><th class="r">This month</th></tr>
-    ${sec('Routine')}${row('Days planned', W.planned, M.planned)}${row('Average day score', W.avgScore != null ? W.avgScore + '%' : '—', M.avgScore != null ? M.avgScore + '%' : '—')}${row('Blocks done', `${W.blocksDone}/${W.blocksTotal}`, `${M.blocksDone}/${M.blocksTotal}`)}${row('Workout sessions logged', W.workouts, M.workouts)}
-    ${pickRows}
-    ${sec('Health')}${row('Days with food logged', W.foodDays, M.foodDays)}${row('Avg calories', f0(W.avgCal), f0(M.avgCal))}${row('Avg protein (g)', f0(W.avgP), f0(M.avgP))}${row('Avg fiber (g)', f0(W.avgFib), f0(M.avgFib))}${row(`Days protein ≥ ${DB.settings.proteinTarget} g`, W.proteinHit, M.proteinHit)}${row('Total deficit (cal)', W.defDays ? Math.round(W.def) : '—', M.defDays ? Math.round(M.def) : '—')}${row(`Deficit goal (${(num(DB.settings.deficitGoal) || 500)}/day + carry-over)`, WG.goal.toLocaleString('en-US'), '')}${row('Carried over from last week', WG.carry ? WG.carry.toLocaleString('en-US') : '0', '')}${row('Deficit still to go', Math.max(0, WG.goal - WD.def).toLocaleString('en-US'), '')}${row('Workout days', `${WW.done} / ${WW.goal}`, '')}
-    ${sec('Spending')}${row('Total', money(W.spend), money(M.spend))}${[...cats].sort((a, b) => (M.cats[b] || 0) - (M.cats[a] || 0)).map((c) => row(esc(c), money(W.cats[c] || 0), money(M.cats[c] || 0))).join('')}
-    ${(() => { const cs = new Set([...Object.keys(W.cardsT), ...Object.keys(M.cardsT)]); return cs.size ? sec('Spending by card') + [...cs].sort((a, b) => (M.cardsT[b] || 0) - (M.cardsT[a] || 0)).map((c) => row(esc(c), money(W.cardsT[c] || 0), money(M.cardsT[c] || 0))).join('') : ''; })()}
-  </table></div><div class="hint" style="margin-top:10px">Week starts Monday. Only days up to today count.</div>`;
+  const P = biPage(), R = biRange(P.range || 'thisMonth'), ed = !!ui.biEdit;
+  const tabs = DB.dashboards.map((d) => `<button class="${d.id === P.id ? 'on' : ''}" data-a="biPage" data-id="${d.id}">${esc(d.name)}</button>`).join('');
+  const fl = (ui.biF || []).map((f, i) => `<span class="fchip">${esc(f.v)}<button class="icon-btn" data-a="biFClear" data-i="${i}" aria-label="Remove filter">${ic('x', 12, 2.2)}</button></span>`).join('');
+  return `<div class="head"><div class="head-title"><span class="kicker">Dashboard</span>${ed ? `<input class="inp h1in" value="${esc(P.name)}" data-c="biPageName" aria-label="Page name">` : `<h1 class="h1">${esc(P.name)}</h1>`}</div>
+    <div class="row-flex"><select class="sel" data-c="biRange" aria-label="Date range">${Object.entries(BI_RANGES).map(([k, l]) => `<option value="${k}" ${P.range === k ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="btn ${ed ? 'primary' : ''}" data-a="biEditMode">${ed ? 'Done' : 'Edit dashboard'}</button></div></div>
+  <div class="bitabs"><div class="seg bi">${tabs}</div>${ed ? `<button class="btn sm" data-a="biPageAdd">+ Page</button>${DB.dashboards.length > 1 ? `<button class="btn sm danger" data-a="biPageDel">Delete page</button>` : ''}<button class="btn sm primary" data-a="biAdd">+ Add tile</button>` : ''}<span class="small faint" style="margin-left:auto">${esc(R.label)} · ${shortDay(R.from)} – ${shortDay(R.to)}</span></div>
+  ${fl ? `<div class="row-flex" style="margin:-4px 0 12px"><span class="small faint">Filtered to</span>${fl}<button class="btn ghost sm" data-a="biFClear" data-i="all">Clear all</button></div>` : ''}
+  ${ui.biDraft ? biEditor() : ''}
+  <div class="bigrid">${P.tiles.map((t) => biTileHTML(t, ed)).join('') || `<div class="dcard z4"><div class="faint">This page is empty. Click <b>Edit dashboard</b>, then <b>+ Add tile</b>.</div></div>`}</div>
+  <div class="hint" style="margin-top:12px">Hover anything for details. Click a bar, slice or row to filter the whole page. Weeks start Monday.</div>`;
 };
 
 // ---------- settings ----------
@@ -1108,6 +1363,20 @@ const A = {
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
   hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
+  biPage: (el) => { ui.biPage = el.dataset.id; ui.biF = []; ui.biDraft = null; render(); },
+  biEditMode: () => { ui.biEdit = !ui.biEdit; if (!ui.biEdit) ui.biDraft = null; render(); },
+  biPageAdd: () => { const d = { id: 'd' + uid(), name: 'New page', range: 'thisMonth', tiles: [] }; DB.dashboards.push(d); ui.biPage = d.id; save(); render(); },
+  biPageDel: () => { const P = biPage(); if (!confirm(`Delete the page “${P.name}” and its ${P.tiles.length} tiles?`)) return; DB.dashboards = DB.dashboards.filter((d) => d.id !== P.id); ui.biPage = null; save(); render(); },
+  biAdd: () => { ui.biEditId = 'new'; ui.biDraft = biT('', 'column', 'spending', 'amount', { by: 'day', size: 2 }); render(); },
+  biEditTile: (el) => { const { t } = biTile(el.dataset.id); if (!t) return; ui.biEditId = t.id; ui.biDraft = { ...t }; render(); },
+  biSet: (el) => { ui.biDraft[el.dataset.f] = el.dataset.v; if (el.dataset.f === 'vis') { if (el.dataset.v === 'kpi') { ui.biDraft.by = 'none'; ui.biDraft.size = '1'; } else if (ui.biDraft.by === 'none') ui.biDraft.by = el.dataset.v === 'column' || el.dataset.v === 'line' ? 'day' : Object.keys(BI_DS[ui.biDraft.src].fields)[0]; } render(); },
+  biCancel: () => { ui.biDraft = null; render(); },
+  biSave: () => { const t = ui.biDraft, P = biPage(); if (ui.biEditId === 'new') P.tiles.push(t); else { const x = biTile(ui.biEditId); if (x.t) Object.assign(x.t, t); } ui.biDraft = null; save(); render(); toast('Saved tile'); },
+  biDup: (el) => { const { d, t } = biTile(el.dataset.id); if (!t) return; d.tiles.splice(d.tiles.indexOf(t) + 1, 0, { ...t, id: 't' + uid(), title: (t.title || '') + ' (copy)' }); save(); render(); },
+  biDel: (el) => { const { d, t } = biTile(el.dataset.id); if (!t || !confirm(`Delete “${t.title || 'this tile'}”?`)) return; d.tiles.splice(d.tiles.indexOf(t), 1); save(); render(); },
+  biMove: (el) => { const { d, t } = biTile(el.dataset.id); if (!t) return; const i = d.tiles.indexOf(t), j = i + +el.dataset.d; if (j < 0 || j >= d.tiles.length) return; d.tiles.splice(i, 1); d.tiles.splice(j, 0, t); save(); render(); },
+  biF: (el) => { ui.biF = ui.biF || []; const i = ui.biF.findIndex((f) => f.f === el.dataset.f && f.v === el.dataset.v); if (i >= 0) ui.biF.splice(i, 1); else { ui.biF = ui.biF.filter((f) => f.f !== el.dataset.f); ui.biF.push({ f: el.dataset.f, v: el.dataset.v }); } render(); },
+  biFClear: (el) => { if (el.dataset.i === 'all') ui.biF = []; else ui.biF.splice(+el.dataset.i, 1); render(); },
   sNav: (el) => { const d = +el.dataset.d; ui.sMonth = d === 0 ? monthKey(todayKey()) : addMonths(ui.sMonth, d); ui.sFilter = null; render(); },
   sGo: (el) => { ui.sMonth = el.dataset.m; ui.sFilter = null; render(); },
   sFilt: (el) => { const f = { k: el.dataset.k, v: el.dataset.v, m: ui.sMonth }; ui.sFilter = ui.sFilter && ui.sFilter.k === f.k && ui.sFilter.v === f.v ? null : f; render(); },
@@ -1298,6 +1567,15 @@ const C = {
   listDistinct: (el) => { listById(el.dataset.l).distinct = el.checked; save(); },
   addOpt: (el) => { const v = el.value.trim(); if (v) { listById(el.dataset.l).options.push(v); save(); render(); const n = document.querySelector(`[data-c="addOpt"][data-l="${el.dataset.l}"]`); if (n) n.focus(); } },
   burn: (el) => { if (el.value.trim() === '') delete DB.burns[ui.hDate]; else DB.burns[ui.hDate] = num(el.value); save(); render(); },
+  biIn: (el) => { const t = ui.biDraft, f = el.dataset.f; let v = el.value; if (f === 'target' && el.tagName === 'INPUT') v = v.trim() === '' ? '' : String(num(v));
+    t[f] = v;
+    if (f === 'src') { const ds = BI_DS[v]; t.m = Object.keys(ds.measures)[0]; t.agg = ''; t.ff = ''; t.fv = ''; if (!(t.by in BI_TIME) && t.by !== 'none') t.by = Object.keys(ds.fields)[0]; }
+    if (f === 'm') t.agg = '';
+    if (f === 'ff') t.fv = '';
+    if (f === 'by' && v !== 'none' && t.vis === 'kpi') { t.vis = v in BI_TIME ? 'column' : 'bar'; if (t.size === '1') t.size = '2'; }
+    render(); },
+  biRange: (el) => { biPage().range = el.value; save(); render(); },
+  biPageName: (el) => { const v = el.value.trim(); if (v) { biPage().name = v; save(); render(); } },
   addCard: (el) => { const v = el.value.trim(); if (v && !DB.cards.includes(v)) { DB.cards.push(v); save(); render(); } },
   addCat: (el) => { const v = el.value.trim(); if (v && !DB.categories.includes(v)) { DB.categories.push(v); save(); render(); } },
   set: (el) => { const f = el.dataset.f; DB.settings[f] = f === 'currency' ? el.value : num(el.value); save(); },
