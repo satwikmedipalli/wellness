@@ -78,6 +78,8 @@ Then, for authentication:
 | list_expenses | Expenses between dates, by card or category |
 | log_food | Add food, from your library or with estimated macros |
 | log_expenses | Add spending with category and card |
+| log_income | Add take-home pay or stock results (Salary / Stocks; negative for a loss) |
+| list_income | Income between dates with spent, net and savings rate |
 | set_calories_burned | Calories burned for the deficit |
 | plan_day | Put a saved plan on a day, with one-day changes |
 | update_day | Tick blocks, pick free-time choices, add notes |

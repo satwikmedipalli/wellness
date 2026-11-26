@@ -96,7 +96,8 @@ function defaults() {
     training: {},
     cards: ['AMEX Blue Cash Preferred', 'Zolve', 'Discover', 'Robinhood Gold', 'BILT', 'Apple Card'],
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
-    expenses: []
+    expenses: [],
+    income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' }
   };
 }
 
@@ -282,9 +283,9 @@ function choiceWarnings(day) {
 }
 
 // ---------- shell ----------
-const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', 'Log'], ['health', 'Health'], ['spending', 'Spending'], ['summary', 'Dashboard'], ['settings', 'Settings']];
+const NAV = [['today', 'Today'], ['week', 'Week'], ['plans', 'Plans'], ['log', 'Log'], ['health', 'Health'], ['spending', 'Money'], ['summary', 'Dashboard'], ['settings', 'Settings']];
 // ---------- glass shell: docks, top bar, theme, quick actions ----------
-const NAV_DESC = { today: 'Your plan for the day, live', week: 'The week at a glance', plans: 'Day templates and blocks', log: 'Every day, scored', health: 'Food, burn, deficit and workouts', spending: 'Expenses by category and card', summary: 'Build-your-own dashboards', settings: 'Goals, sync and updates' };
+const NAV_DESC = { today: 'Your plan for the day, live', week: 'The week at a glance', plans: 'Day templates and blocks', log: 'Every day, scored', health: 'Food, burn, deficit and workouts', spending: 'Spending and income, net and savings rate', summary: 'Build-your-own dashboards', settings: 'Goals, sync and updates' };
 function dockHTML(side) {
   return `<span class="dind" aria-hidden="true"></span>` + NAV.map(([k, l]) => `<button class="dk ${ui.view === k ? 'on' : ''}" data-a="go" data-v="${k}" ${ui.view === k ? 'aria-current="page"' : ''} aria-label="${l}">${ic(k, 17)}${side ? `<span class="dtip">${l}</span>` : `<span class="dtx">${l}</span>`}</button>`).join('');
 }
@@ -326,6 +327,7 @@ addEventListener('resize', () => { placeDock($('#nav')); placeDock($('#nav2')); 
 const CMD_ACTIONS = [
   { k: 'food', label: 'Log food', desc: 'Add something you ate today', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const f = $('#fName'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
   { k: 'dollar', label: 'Add an expense', desc: 'Log a purchase', run: () => { go('spending'); setTimeout(() => { const f = $('#eItem'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
+  { k: 'dollar', label: 'Add income', desc: 'Log pay or a stock sale', run: () => { ui.mTab = 'income'; go('spending'); setTimeout(() => { const f = $('#iAmt'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
   { k: 'health', label: 'Log a workout', desc: 'Open today’s workout', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const w = document.querySelector('.seg.daytype'); if (w) w.scrollIntoView({ block: 'start' }); }, 50); } }
 ];
 function cmdItems(q) {
@@ -1056,6 +1058,100 @@ document.addEventListener('mouseleave', hideTip);
 document.addEventListener('click', hideTip, true);
 document.addEventListener('wheel', hideTip, { passive: true });
 
+// ---------- income (Money → Income tab) ----------
+// Income entries are { id, date, source, item, amount } (amount can be negative for a stock loss).
+// A pay schedule adds each paycheck on its payday; ids are pay-<date> so syncing never doubles one.
+const PAY_FREQ = { weekly: 'Every week', biweekly: 'Every 2 weeks', semimonthly: 'Twice a month (15th + last day)', monthly: 'Every month' };
+function nextPayday(k, f) {
+  if (f === 'weekly') return addDays(k, 7);
+  if (f === 'biweekly') return addDays(k, 14);
+  const y = +k.slice(0, 4), m = +k.slice(5, 7), d = +k.slice(8, 10);
+  if (f === 'semimonthly') { const last = daysIn(k.slice(0, 7)); if (d < 15) return k.slice(0, 8) + '15'; if (d < last) return k.slice(0, 8) + pad(last); const nm = addMonths(k.slice(0, 7), 1); return nm + '-15'; }
+  const nm = addMonths(k.slice(0, 7), 1); return nm + '-' + pad(Math.min(d, daysIn(nm)));
+}
+function runPay() {
+  const P = DB.pay; if (!P || !P.on || !P.next || !(num(P.amount) > 0)) return false;
+  const tk = todayKey(); let changed = false, guard = 0;
+  while (P.next <= tk && guard++ < 60) {
+    const id = 'pay-' + P.next;
+    if (!DB.income.some((x) => x.id === id)) { DB.income.push({ id, date: P.next, source: 'Salary', item: 'Paycheck', amount: num(P.amount), auto: true }); changed = true; }
+    P.next = nextPayday(P.next, P.freq || 'biweekly'); changed = true;
+  }
+  return changed;
+}
+const incomeIn = (from, to) => (DB.income || []).filter((e) => e.date >= from && e.date <= to);
+const signed = (n) => (n >= 0 ? '+' : '−') + money(Math.abs(n)).replace('−', '');
+
+function moneyBars(mk) { // earned vs spent, last 6 months, two series side by side
+  const W = 640, H = 220, L = 48, R = 8, T = 12, B = 26, pw = W - L - R, ph = H - T - B;
+  const ms = Array.from({ length: 6 }, (_, i) => addMonths(mk, i - 5));
+  const rows = ms.map((m) => { const inc = incomeIn(m + '-01', m + '-31'), ex = expensesIn(m + '-01', m + '-31'); return { m, e: sumAmt(inc), s: sumAmt(ex), inc, ex }; });
+  const max = niceMax(Math.max(10, ...rows.map((r) => Math.max(r.e, r.s)))), slot = pw / 6, bw = Math.min(26, slot / 3);
+  const Y = (v) => T + ph - (Math.max(0, v) / max) * ph;
+  const grid = [0, .5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${Y(max * f)}" y2="${Y(max * f)}" class="cg"/><text x="${L - 6}" y="${Y(max * f) + 3.5}" class="ct" text-anchor="end">${moneyShort(max * f)}</text>`).join('');
+  const bar = (x, v, cls) => { const h = T + ph - Y(v); return h > 0 ? `<path d="M${x},${T + ph} v${-(Math.max(h, 3) - 3)} q0,-3 3,-3 h${bw - 6} q3,0 3,3 v${Math.max(h, 3) - 3} z" class="${cls}"/>` : ''; };
+  const g = rows.map((r, i) => { const x0 = L + i * slot + slot / 2 - bw - 2, net = r.e - r.s;
+    const t = tip(monthLabel(r.m), [['Earned', `<b>${money(r.e)}</b>`], ['Spent', money(r.s)], ['Net', signed(net)], ['Savings rate', r.e > 0 ? Math.round((net / r.e) * 100) + '%' : '—']],
+      [['Earned from', groupBy(r.inc.map((x) => ({ ...x })), (x) => x.source).map((x) => [esc(x[0]), money(x[1])])]], i === 5 ? '' : 'Click to open this month');
+    return `<g class="hit"${i === 5 ? '' : ` data-a="sGo" data-m="${r.m}"`}${t}><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>${bar(x0, r.e, 'cb')}${bar(x0 + bw + 4, r.s, 'cb2')}<text x="${L + i * slot + slot / 2}" y="${H - 7}" class="ct" text-anchor="middle">${MON[+r.m.slice(5) - 1].slice(0, 3)}</text></g>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Earned and spent over six months">${grid}${g}</svg><div class="legend"><span><i class="sq"></i>Earned</span><span><i class="sq s2"></i>Spent</span></div>`;
+}
+function netLine(mk) { // running net for the month: income minus spending, day by day
+  const W = 640, H = 200, L = 52, R = 10, T = 12, B = 24, pw = W - L - R, ph = H - T - B, n = daysIn(mk), tk = todayKey();
+  const upto = monthKey(tk) === mk ? +tk.slice(8) : mk > monthKey(tk) ? 0 : n;
+  const inc = incomeIn(mk + '-01', mk + '-31'), ex = expensesIn(mk + '-01', mk + '-31');
+  let run = 0; const pts = [];
+  for (let d = 1; d <= upto; d++) { const k = `${mk}-${pad(d)}`, a = sumAmt(inc.filter((x) => x.date === k)), b = sumAmt(ex.filter((x) => x.date === k)); run += a - b; pts.push({ d, k, a, b, run }); }
+  const hi = niceMax(Math.max(10, ...pts.map((p) => p.run))), lo = Math.min(0, ...pts.map((p) => p.run)) < 0 ? -niceMax(-Math.min(...pts.map((p) => p.run))) : 0;
+  const X = (d) => L + ((d - 1) / Math.max(1, n - 1)) * pw, Y = (v) => T + ((hi - v) / (hi - lo)) * ph;
+  const grid = [lo, 0, hi].filter((v, i, a) => a.indexOf(v) === i).map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="${v === 0 ? 'cz' : 'cg'}"/><text x="${L - 6}" y="${Y(v) + 3.5}" class="ct" text-anchor="end">${v < 0 ? '−' + moneyShort(-v) : moneyShort(v)}</text>`).join('');
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.d).toFixed(1)},${Y(p.run).toFixed(1)}`).join('');
+  const hits = pts.map((p) => `<g class="hit vline"${tip(longDay(p.k), [['Net so far', `<b>${signed(p.run)}</b>`], ['Earned that day', money(p.a)], ['Spent that day', money(p.b)]])}><rect x="${X(p.d) - pw / n / 2}" y="${T}" width="${pw / n}" height="${ph}" fill="transparent"/><line x1="${X(p.d)}" x2="${X(p.d)}" y1="${T}" y2="${T + ph}" class="cx"/><circle cx="${X(p.d)}" cy="${Y(p.run)}" r="4" class="cdot"/></g>`).join('');
+  const last = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Running net this month">${grid}${pts.length ? `<path d="${d}" class="cl"/><circle cx="${X(last.d)}" cy="${Y(last.run)}" r="4.5" class="cdot" style="opacity:1"/>` : ''}<text x="${L}" y="${H - 6}" class="ct">1</text><text x="${W - R}" y="${H - 6}" class="ct" text-anchor="end">${n}</text>${hits}</svg>`;
+}
+function incomeView() {
+  const mk = ui.sMonth, tk = todayKey(), P = DB.pay || {};
+  const inc = incomeIn(mk + '-01', mk + '-31').sort((a, b) => (a.date < b.date ? 1 : -1)), ex = expensesIn(mk + '-01', mk + '-31');
+  const earned = sumAmt(inc), spent = sumAmt(ex), net = earned - spent;
+  const by = (s) => sumAmt(inc.filter((x) => x.source === s));
+  const pm = addMonths(mk, -1), pe = sumAmt(incomeIn(pm + '-01', pm + '-31'));
+  const srcs = groupBy(inc, (x) => x.source);
+  const rows = inc.map((e, i) => `<tr${tip(esc(e.item || e.source), [['Amount', `<b>${signed(e.amount)}</b>`], ['Date', longDay(e.date)], ['Source', esc(e.source)], ['Share of the month', pctTxt(e.amount, earned)]], [], e.auto ? 'Added by your pay schedule' : '')}><td class="g">${i + 1}</td><td class="mono">${shortDay(e.date)}</td><td>${esc(e.item || '')}${e.auto ? ' <span class="faint small">· auto</span>' : ''}</td><td class="small">${esc(e.source)}</td><td class="mono r ${e.amount < 0 ? 'neg' : ''}">${signed(e.amount)}</td><td class="c"><button class="icon-btn" data-a="delInc" data-id="${e.id}" aria-label="Remove ${esc(e.item || e.source)}">${ic('x', 13)}</button></td></tr>`).join('');
+  return `<div class="head"><div class="head-title"><span class="kicker">Money · Income</span><h1 class="h1">${monthLabel(mk).split(' ')[0]}</h1></div>${dateNav('sNav', 'This month')}</div>
+  <div class="stats">
+    <div class="stat hit"${tip('Earned · ' + monthLabel(mk), [['Total', `<b>${money(earned)}</b>`], [`${MON[+pm.slice(5) - 1]}`, money(pe)], ['Change', chg(earned, pe)], ['Entries', inc.length]])}><span class="k">Earned · ${MON[+mk.slice(5) - 1]}</span><span class="v">${money(earned)}</span><span class="small faint">${pe ? chg(earned, pe) + ' vs ' + MON[+pm.slice(5) - 1].slice(0, 3) : 'nothing logged last month'}</span></div>
+    <div class="stat"><span class="k">Spent</span><span class="v">${money(spent)}</span></div>
+    <div class="stat hit"${tip('Net', [['Earned', money(earned)], ['Spent', money(spent)], ['Left over', `<b>${signed(net)}</b>`]])}><span class="k">Net</span><span class="v ${net < 0 ? 'neg' : ''}">${signed(net)}</span></div>
+    <div class="stat"><span class="k">Savings rate</span><span class="v">${earned > 0 ? Math.round((net / earned) * 100) + '%' : '—'}</span>${earned > 0 ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, (net / earned) * 100))}%"></i></div>` : ''}</div>
+    <div class="stat"><span class="k">From salary</span><span class="v">${money(by('Salary'))}</span></div>
+    <div class="stat"><span class="k">From stocks</span><span class="v ${by('Stocks') < 0 ? 'neg' : ''}">${signed(by('Stocks'))}</span></div>
+  </div>
+  <div class="dash">
+    <section class="dcard span2"><div class="dh"><h2 class="h3">Earned vs spent</h2><span class="small faint">last 6 months · hover for details</span></div>${moneyBars(mk)}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">Pay schedule</h2>${P.on ? '<span class="small faint">on</span>' : ''}</div>
+      ${P.on && P.next && num(P.amount) > 0 ? `<div class="payday"><span class="small faint">Next payday</span><b class="mono">${longDay(P.next)}</b><span class="mono">${money(num(P.amount))}</span><span class="small faint">in ${Math.max(0, dayDiff(tk, P.next))} day${dayDiff(tk, P.next) === 1 ? '' : 's'} · ${esc(PAY_FREQ[P.freq] || '')}</span></div>` : '<div class="small faint">Set your take-home pay once and each paycheck is added on payday.</div>'}
+      <div class="payform"><label class="fld">Take-home pay<input class="inp num" id="payAmt" value="${P.amount ? esc(P.amount) : ''}" placeholder="0.00"></label>
+        <label class="fld">How often<select class="sel" id="payFreq">${Object.entries(PAY_FREQ).map(([k, l]) => `<option value="${k}" ${P.freq === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="fld">Next payday<input class="inp" type="date" id="payNext" value="${esc(P.next || '')}"></label>
+        <div class="row-flex"><button class="btn primary" data-a="paySave">${P.on ? 'Save' : 'Turn on'}</button>${P.on ? '<button class="btn" data-a="payOff">Turn off</button>' : ''}</div></div>
+    </section>
+    <section class="dcard span2"><div class="dh"><h2 class="h3">Running net</h2><span class="small faint">earned minus spent, day by day</span></div>${netLine(mk)}</section>
+    <section class="dcard"><div class="dh"><h2 class="h3">By source</h2></div>${srcs.length ? `<div class="hbars">${srcs.map(([s, a, n]) => `<div class="hb hit"${tip(esc(s), [['This month', `<b>${signed(a)}</b>`], ['Share', pctTxt(a, earned)], ['Entries', n]])}><div class="hb-top"><span class="hb-name">${esc(s)}</span><span class="mono hb-val">${signed(a)}<span class="faint"> · ${pctTxt(a, earned)}</span></span></div><div class="hb-track"><i style="width:${Math.max(2, Math.abs(a) / Math.max(...srcs.map((x) => Math.abs(x[1]))) * 100)}%${a < 0 ? ';background:var(--bad)' : ''}"></i></div></div>`).join('')}</div>` : '<div class="faint small">No income logged this month.</div>'}</section>
+  </div>
+  <h2 class="h2" style="margin:22px 0 10px">Income</h2>
+  <div class="sheet"><table><colgroup><col style="width:40px"><col style="width:84px"><col><col style="width:160px"><col style="width:130px"><col style="width:52px"></colgroup>
+    <tr class="letters"><td></td><td>A</td><td>B</td><td>C</td><td>D</td><td></td></tr>
+    <tr><th class="g">#</th><th>Date</th><th>What</th><th>Source</th><th class="r">Amount</th><th></th></tr>
+    ${rows || '<tr><td class="g">1</td><td colspan="5" class="faint">No income logged this month.</td></tr>'}
+    ${rows ? `<tr class="total"><td></td><td colspan="3">Total</td><td class="mono r">${signed(earned)}</td><td></td></tr>` : ''}
+  </table>
+  <div class="addbar"><label class="fld">Date<input class="inp" type="date" id="iDate" value="${tk}"></label><label class="fld" style="flex:1;min-width:160px">What<input class="inp" id="iItem" placeholder="Paycheck, sold NVDA, dividend…"></label><label class="fld">Source<select class="sel" id="iSrc">${(DB.incomeSources || ['Salary', 'Stocks']).map((s) => `<option>${esc(s)}</option>`).join('')}</select></label><label class="fld">Amount<input class="inp num" id="iAmt" placeholder="0.00"></label><button class="btn primary" data-a="addInc">Add</button></div></div>
+  <div class="hint" style="margin-top:8px">Amounts are take-home. For stocks, log what you realised when you sold (a loss as a negative number) and any dividends.</div>`;
+}
+const moneyTabs = () => `<div class="bitabs"><div class="seg bi"><button class="${ui.mTab !== 'income' ? 'on' : ''}" data-a="mTab" data-t="spend">Spending</button><button class="${ui.mTab === 'income' ? 'on' : ''}" data-a="mTab" data-t="income">Income</button></div></div>`;
+{ const spendView = VIEWS.spending; VIEWS.spending = () => moneyTabs() + (ui.mTab === 'income' ? incomeView() : spendView()); }
+
 // ---------- summary ----------
 // ---------- weekly goals ----------
 // Deficit goal per week = daily goal × 7, plus whatever the week before fell short of its own goal (carry-over),
@@ -1141,6 +1237,16 @@ const BI_DS = {
       return { date: s.date, exercise: ex.name || 'Removed exercise', group: ex.group || 'Other', kind: bw ? 'Bodyweight' : 'Weights', sets: s.sets.length,
         reps: s.sets.reduce((a, x) => a + num(x.r) * (x.side ? 2 : 1), 0), volume: bw ? 0 : s.sets.reduce((a, x) => a + num(x.w) * num(x.r), 0), top: bw ? null : Math.max(0, ...s.sets.map((x) => num(x.w))), done: 1 }; })
   },
+  income: {
+    label: 'Income', fields: { source: 'Source', item: 'What' },
+    measures: { amount: ['Amount earned', 'money', 'sum'], count: ['Entries', 'int', 'sum'] },
+    rows: (f, t) => incomeIn(f, t).map((e) => ({ date: e.date, source: e.source, item: e.item || e.source, amount: e.amount, count: 1 }))
+  },
+  cash: {
+    label: 'Cash flow', fields: { dir: 'In or out' },
+    measures: { net: ['Net (earned − spent)', 'money', 'sum'], earned: ['Earned', 'money', 'sum'], spent: ['Spent', 'money', 'sum'] },
+    rows: (f, t) => [...incomeIn(f, t).map((e) => ({ date: e.date, dir: 'In', net: e.amount, earned: e.amount, spent: 0 })), ...expensesIn(f, t).map((e) => ({ date: e.date, dir: 'Out', net: -e.amount, earned: 0, spent: e.amount }))]
+  },
   routine: {
     label: 'Routine', fields: { plan: 'Plan' },
     measures: { score: ['Day score (%)', 'pct', 'avg'], done: ['Blocks done', 'int', 'sum'], total: ['Blocks planned', 'int', 'sum'], days: ['Days planned', 'int', 'sum'] },
@@ -1159,7 +1265,7 @@ const BI_RANGES = { thisWeek: 'This week', lastWeek: 'Last week', last7: 'Last 7
 const BI_SIZES = [['1', 'S'], ['2', 'M'], ['3', 'L'], ['4', 'Full']];
 
 function biEarliest() {
-  const ds = [...DB.expenses.map((e) => e.date), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
+  const ds = [...DB.expenses.map((e) => e.date), ...(DB.income || []).map((e) => e.date), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
   return ds.length ? ds.reduce((a, b) => (a < b ? a : b)) : todayKey();
 }
 function biRange(p) {
@@ -1424,6 +1530,11 @@ const A = {
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
   hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
+  mTab: (el) => { ui.mTab = el.dataset.t; ui.sFilter = null; render(); },
+  addInc: () => { const item = $('#iItem').value.trim(), amt = num($('#iAmt').value); if (!amt) { $('#iAmt').focus(); return; } DB.income.push({ id: uid(), date: $('#iDate').value || todayKey(), source: $('#iSrc').value || 'Salary', item: item || $('#iSrc').value, amount: amt }); save(); render(); toast('Added ' + signed(amt)); },
+  delInc: (el) => { DB.income = DB.income.filter((x) => x.id !== el.dataset.id); save(); render(); },
+  paySave: () => { const amt = num($('#payAmt').value), nx = $('#payNext').value; if (!(amt > 0)) { $('#payAmt').focus(); return; } if (!nx) { $('#payNext').focus(); return; } DB.pay = { on: true, amount: amt, freq: $('#payFreq').value, next: nx }; runPay(); save(); render(); toast('Pay schedule saved'); },
+  payOff: () => { DB.pay = { ...DB.pay, on: false }; save(); render(); toast('Pay schedule off'); },
   cmdOpen: () => { ui.cmd = true; ui.cmdQ = ''; ui.cmdSel = 0; renderCmd(); },
   cmdClose: () => { ui.cmd = false; renderCmd(); },
   cmdRun: (el) => { const x = cmdItems(ui.cmdQ || '')[+el.dataset.i]; ui.cmd = false; renderCmd(); if (x) x.run(); },
@@ -1706,6 +1817,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); A.cmdRun({ dataset: { i: ui.cmdSel || 0 } }); return; }
   }
   if (e.key === 'Enter' && e.target.matches('#eAmt,#eItem')) A.addExp();
+  if (e.key === 'Enter' && e.target.matches('#iAmt,#iItem')) A.addInc();
   if (e.key === 'Enter' && e.target.matches('#fName,#fSrv,#fCal,#fP,#fC,#fFib,#fF')) A.addFood();
   if (e.key === 'Escape' && ui.open) { ui.open = null; render(); }
 });
@@ -1715,7 +1827,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ren
 let lastDay = todayKey();
 setInterval(() => {
   const t = todayKey();
-  if (t !== lastDay) { if (ui.date === lastDay) ui.date = t; if (ui.hDate === lastDay) ui.hDate = t; lastDay = t; }
+  if (t !== lastDay) { if (runPay()) save(); if (ui.date === lastDay) ui.date = t; if (ui.hDate === lastDay) ui.hDate = t; lastDay = t; }
   const active = document.activeElement;
   if (ui.view === 'today' && !ui.editDay && !(active && active.matches('input,textarea,select'))) render();
 }, 60 * 1000);
@@ -1733,6 +1845,7 @@ if (window.api && window.api.onUpdateReady) window.api.onUpdateReady((r) => {
   pruneAll();
   if (saved && JSON.stringify(DB) !== before) save();
   if (!saved) save();
+  if (runPay()) save();
   applyBg(); applyTheme();
   render();
   Sync.pull();
