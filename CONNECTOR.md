@@ -80,6 +80,9 @@ Then, for authentication:
 | log_expenses | Add spending with category and card |
 | log_income | Add take-home pay or stock results (Salary / Stocks; negative for a loss) |
 | list_income | Income between dates with spent, net and savings rate |
+| log_trade | Log a stock or option trade with buy and sell prices; P/L is calculated |
+| close_trade | Close an open trade (or let an option expire at 0) |
+| list_trades | Open positions and closed trades with P/L and win rate |
 | set_calories_burned | Calories burned for the deficit |
 | plan_day | Put a saved plan on a day, with one-day changes |
 | update_day | Tick blocks, pick free-time choices, add notes |
