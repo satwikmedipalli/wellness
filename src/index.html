@@ -7,22 +7,24 @@
 <title>Wellness</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=EB+Garamond:ital,wght@0,500;0,600;1,500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div class="scene" aria-hidden="true"><img id="bgimg" alt="" hidden><i></i><i></i><i></i><i></i></div>
 <div class="app">
-  <aside class="side">
-    <div class="drag"></div>
-    <div class="brand">
-      <span class="logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 3v18"/></svg></span>
-      <span class="brand-name">Wellness</span>
-    </div>
-    <nav id="nav" aria-label="Sections"></nav>
-    <div class="side-foot" id="sidefoot"></div>
-  </aside>
-  <main id="main" class="main" tabindex="-1"></main>
+  <header class="gtop">
+    <div class="gbrand"><span class="glogo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 3v18"/></svg></span><div><strong>WELLNESS</strong><small id="gsub">Your day</small></div></div>
+    <button class="gask" data-a="cmdOpen" aria-label="Search and quick actions"><span class="gorb" aria-hidden="true"></span><span class="gprompt" id="gprompt">Search or jump to…</span><kbd>⌘K</kbd></button>
+    <div class="gactions"><button class="gicon" data-a="themeCycle" id="themeBtn" aria-label="Theme"></button><button class="gicon" data-a="go" data-v="settings" id="syncBtn" aria-label="Sync and settings"></button></div>
+  </header>
+  <div class="stagewrap">
+    <nav id="nav" class="dock dside" aria-label="Sections"></nav>
+    <main id="main" class="main stage" tabindex="-1"></main>
+    <nav id="nav2" class="dock dbottom" aria-label="Sections"></nav>
+  </div>
 </div>
+<div id="cmd"></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>
