@@ -255,3 +255,30 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .big-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dash2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
 @media (max-width:1050px){.dash{grid-template-columns:1fr 1fr}.dash .span3{grid-column:span 2}}
+/* spending: hover cards + click filters */
+.ctip{position:fixed;left:0;top:0;z-index:50;pointer-events:none;opacity:0;transition:opacity .08s;min-width:200px;max-width:300px;background:var(--card);color:var(--ink);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.14);font-size:12px}
+.ctip.on{opacity:1}
+.ctip .tt-h{font-weight:600;font-size:13px;margin-bottom:6px}
+.ctip table{width:100%;border-collapse:collapse}
+.ctip td{padding:2px 0;color:var(--ink2);vertical-align:top}
+.ctip td+td{text-align:right;color:var(--ink);font-family:var(--mono);padding-left:12px;white-space:nowrap}
+.ctip td:first-child{overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.ctip .tt-m{color:var(--ink3);font-family:var(--sans)}
+.ctip .tt-s{margin:8px 0 3px;padding-top:7px;border-top:1px solid var(--line);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
+.ctip .tt-f{margin-top:7px;font-size:11px;color:var(--ink3)}
+.hit{cursor:default}
+[data-a].hit{cursor:pointer}
+.chart .hit:hover .cb{filter:brightness(1.15)}
+.chart .hit.sel .cb{fill:var(--deep)}
+.chart .vline .cx{stroke:var(--ink3);stroke-width:1;stroke-dasharray:2 3;opacity:0}
+.chart .vline .cdot{opacity:0}
+.chart .vline:hover .cx,.chart .vline:hover .cdot{opacity:1}
+.chart .cdot.prev{fill:var(--ink3)}
+.hb{border-radius:8px;padding:4px 6px;margin:-4px -6px}
+.hb:hover{background:var(--gut)}
+.hb.sel{background:var(--soft);box-shadow:inset 0 0 0 1px var(--soft2)}
+.stat.hit:hover{background:var(--gut)}
+.big.hit:hover{background:var(--gut)}
+.sheet tr[data-tip]:hover td{background:var(--gut)}
+.fchip{display:inline-flex;align-items:center;gap:8px;background:var(--soft);border:1px solid var(--soft2);color:var(--accT);font-size:12.5px;font-weight:600;padding:3px 4px 3px 11px;border-radius:999px}
+.fchip .icon-btn{width:22px;height:22px;border:none;background:transparent;color:var(--accT)}
