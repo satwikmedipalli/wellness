@@ -282,3 +282,55 @@ details.box .inner{padding:12px 14px;display:flex;flex-direction:column;gap:10px
 .sheet tr[data-tip]:hover td{background:var(--gut)}
 .fchip{display:inline-flex;align-items:center;gap:8px;background:var(--soft);border:1px solid var(--soft2);color:var(--accT);font-size:12.5px;font-weight:600;padding:3px 4px 3px 11px;border-radius:999px}
 .fchip .icon-btn{width:22px;height:22px;border:none;background:transparent;color:var(--accT)}
+
+/* dashboard (Summary page) */
+.seg.bi{flex-wrap:wrap}
+.seg.bi button.on{background:var(--acc);color:var(--onAcc)}
+.bitabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-6px 0 16px}
+.bigrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:stretch}
+.bigrid .z1{grid-column:span 1}.bigrid .z2{grid-column:span 2}.bigrid .z3{grid-column:span 3}.bigrid .z4{grid-column:span 4}
+@media (max-width:1100px){.bigrid{grid-template-columns:repeat(2,minmax(0,1fr))}.bigrid .z3,.bigrid .z4{grid-column:span 2}}
+.bt .dh{align-items:flex-start}
+.bt.editing{box-shadow:0 0 0 1px var(--soft2) inset;border-style:dashed}
+.ttools{display:flex;gap:4px;justify-content:flex-end;margin:-4px -6px 0;padding-bottom:6px;border-bottom:1px dashed var(--line2)}
+.ttools .icon-btn{width:28px;height:28px}
+.kpi{display:flex;flex-direction:column;gap:4px;border-radius:8px;margin:-4px -6px;padding:4px 6px}
+.kpi:hover{background:var(--gut)}
+.kpi .kv{font-size:28px;font-weight:500;line-height:1.1}
+.kpi .kc{color:var(--ink2)}
+.kpi .spark{width:100%;height:30px;margin-top:4px}
+.kpi .spark path{fill:none;stroke:var(--acc);stroke-width:1.6;vector-effect:non-scaling-stroke;opacity:.8}
+.chart .cb.neg{fill:var(--bad)}
+.chart .cgoal{stroke:var(--dot);stroke-width:1.5;stroke-dasharray:5 4}
+.chart .dv{font-family:var(--mono);font-size:17px;fill:var(--ink)}
+.donut{display:flex;gap:14px;align-items:center}
+.donut svg{width:150px;flex-shrink:0}
+.donut .sl{stroke:var(--card);stroke-width:1;cursor:pointer}
+.donut .sl:hover{filter:brightness(1.1)}
+.donut .sl.sel{stroke:var(--ink);stroke-width:2}
+.dleg{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:12.5px}
+.dleg>div{display:grid;grid-template-columns:10px minmax(0,1fr) auto 38px;gap:8px;align-items:center;padding:3px 6px;margin:0 -6px;border-radius:6px}
+.dleg>div:hover{background:var(--gut)}.dleg>div.sel{background:var(--soft)}
+.dleg i{width:10px;height:10px;border-radius:3px;display:block}
+.dleg .mono{text-align:right;font-size:12px}
+.sl.s1,.dleg i.s1{fill:#257de0;background:#257de0}.sl.s2,.dleg i.s2{fill:#f47230;background:#f47230}.sl.s3,.dleg i.s3{fill:#00b894;background:#00b894}
+.sl.s4,.dleg i.s4{fill:#f2a600;background:#f2a600}.sl.s5,.dleg i.s5{fill:#ee7fac;background:#ee7fac}.sl.s6,.dleg i.s6{fill:#008a17;background:#008a17}.sl.s7,.dleg i.s7{fill:#6a4ce2;background:#6a4ce2}
+.sl.s0,.dleg i.s0{fill:var(--box);background:var(--box)}
+@media (prefers-color-scheme: dark){
+  .sl.s1,.dleg i.s1{fill:#338ced;background:#338ced}.sl.s2,.dleg i.s2{fill:#e76624;background:#e76624}.sl.s3,.dleg i.s3{fill:#00a888;background:#00a888}
+  .sl.s4,.dleg i.s4{fill:#d28e05;background:#d28e05}.sl.s5,.dleg i.s5{fill:#e24d8b;background:#e24d8b}.sl.s6,.dleg i.s6{fill:#0aac23;background:#0aac23}.sl.s7,.dleg i.s7{fill:#9887ef;background:#9887ef}
+}
+.bitable{max-height:320px;overflow:auto;margin:0 -4px}
+.bitable table{width:100%;border-collapse:collapse;font-size:12.5px}
+.bitable th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);font-weight:600;text-align:left;padding:4px;border-bottom:1px solid var(--line2);position:sticky;top:0;background:var(--card)}
+.bitable td{padding:5px 4px;border-bottom:1px solid var(--line)}
+.bitable .r{text-align:right}
+.bitable tr.hit:hover td{background:var(--gut)}.bitable tr.sel td{background:var(--soft)}
+.bitable tr.tot td{font-weight:600;border-bottom:none}
+.bieditor{display:grid;grid-template-columns:minmax(360px,1fr) minmax(0,1.1fr);gap:16px;background:var(--card);border:1px solid var(--line2);border-radius:12px;padding:16px;margin-bottom:14px}
+.bie-form{display:flex;flex-direction:column;gap:12px}
+.bie-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.bie-grid .sel,.bie-grid .inp{width:100%}
+.bie-prev{background:var(--bg);border-radius:10px;padding:12px;min-width:0}
+.bie-prev .dcard{grid-column:auto}
+.h1in{font-family:var(--serif);font-size:40px;font-weight:600;height:56px;max-width:520px}
