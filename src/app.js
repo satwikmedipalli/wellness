@@ -72,7 +72,7 @@ function defaults() {
   const F = (name, serving, cal, f, c, fib, p, note) => ({ id: uid(), name, serving, cal, f, c, fib, p, note: note || '' });
   return {
     version: 1,
-    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5, tradeTax: 30 },
+    settings: { proteinTarget: 70, fiberTarget: 20, currency: '$', bodyKg: 68, deficitGoal: 500, workoutDaysGoal: 5, tradeTax: 30, heightCm: 165, age: 23, sex: 'male' },
     choiceLists: [{ id: 'free', name: 'Free time', options: ['Sleep', 'PS5', 'Movie', 'Show', 'Stock research', 'Talk to someone', 'Work', 'Project'], distinct: true }],
     plans: [],
     days: {},
@@ -98,7 +98,7 @@ function defaults() {
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: [],
     income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' },
-    trades: []
+    trades: [], cardio: []
   };
 }
 
@@ -329,6 +329,7 @@ const CMD_ACTIONS = [
   { k: 'food', label: 'Log food', desc: 'Add something you ate today', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const f = $('#fName'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
   { k: 'dollar', label: 'Add an expense', desc: 'Log a purchase', run: () => { go('spending'); setTimeout(() => { const f = $('#eItem'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
   { k: 'dollar', label: 'Add income', desc: 'Log pay or a stock sale', run: () => { ui.mTab = 'income'; go('spending'); setTimeout(() => { const f = $('#iAmt'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 50); } },
+  { k: 'health', label: 'Log cardio', desc: 'Treadmill, run, stairs, rowing, bike', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const f = $('#cMin'); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); } }, 60); } },
   { k: 'health', label: 'Log a workout', desc: 'Open today’s workout', run: () => { ui.hDate = todayKey(); go('health'); setTimeout(() => { const w = document.querySelector('.seg.daytype'); if (w) w.scrollIntoView({ block: 'start' }); }, 50); } }
 ];
 function cmdItems(q) {
@@ -833,6 +834,50 @@ function workoutBurn(k) {
   const kcal = Math.round(5 * kg * (liftSets * 3 / 60) + 2.5 * kg * (easySets * 3 / 60) + abKcal);
   return { kcal, liftSets, easySets, abMin: Math.round(abMin), mins: Math.round((liftSets + easySets) * 3 + abMin) };
 }
+// ---------- cardio ----------
+// Cardio entries { id, date, kind, min, mph?, incline?, level?, effort?, kcal? }. Calories are the extra burn on top of
+// sitting: (MET − 1) × kg × hours. Treadmill / walk / run use the ACSM walking and running equations (speed + incline);
+// StairMaster uses its level; rowing, bike and other use the effort. A number from a watch (kcal) wins when given.
+const CARDIO_KINDS = { treadmill: 'Treadmill walk', run: 'Run', walk: 'Outdoor walk', stairs: 'StairMaster', row: 'Rowing', bike: 'Bike', other: 'Other' };
+const CARDIO_EFFORT = { row: { easy: 4.8, moderate: 7, hard: 8.5 }, bike: { easy: 5.5, moderate: 7, hard: 10 }, other: { easy: 4, moderate: 6, hard: 8 } };
+const usesSpeed = (k) => k === 'treadmill' || k === 'run' || k === 'walk';
+function cardioMet(c) {
+  if (usesSpeed(c.kind)) {
+    const v = num(c.mph) * 26.8224, g = num(c.incline) / 100, running = c.kind === 'run' || num(c.mph) >= 4.5;
+    const vo2 = running ? 0.2 * v + 0.9 * v * g + 3.5 : 0.1 * v + 1.8 * v * g + 3.5;
+    return vo2 / 3.5;
+  }
+  if (c.kind === 'stairs') return 4 + 0.65 * (num(c.level) || 6);
+  return (CARDIO_EFFORT[c.kind] || CARDIO_EFFORT.other)[c.effort || 'moderate'];
+}
+function cardioKcal(c) {
+  if (c.kcal !== '' && c.kcal != null && num(c.kcal) > 0) return Math.round(num(c.kcal));
+  const kg = num(DB.settings.bodyKg) || 68;
+  return Math.max(0, Math.round((cardioMet(c) - 1) * kg * (num(c.min) / 60)));
+}
+const cardioOn = (k) => (DB.cardio || []).filter((c) => c.date === k);
+function cardioDesc(c) {
+  const bits = [`${num(c.min)} min`];
+  if (usesSpeed(c.kind)) { if (c.mph) bits.push(`${c.mph} mph`); if (c.kind !== 'walk' && num(c.incline)) bits.push(`${c.incline}% incline`); if (c.mph) bits.push(r1((num(c.mph) * num(c.min)) / 60) + ' mi'); }
+  else if (c.kind === 'stairs') bits.push('level ' + (c.level || 6));
+  else bits.push(c.effort || 'moderate');
+  return bits.join(' · ');
+}
+// What a day burns at rest (Mifflin-St Jeor × 1.2, mostly seated), so Burned can be filled in from the workout + cardio.
+function baseBurn() { const S = DB.settings, kg = num(S.bodyKg) || 68, cm = num(S.heightCm) || 165, age = num(S.age) || 23; return Math.round((10 * kg + 6.25 * cm - 5 * age + (S.sex === 'female' ? -161 : 5)) * 1.2); }
+function cardioCard(k) {
+  const list = cardioOn(k), total = list.reduce((a, c) => a + cardioKcal(c), 0), mins = list.reduce((a, c) => a + num(c.min), 0);
+  const kind = ui.ckind || 'treadmill';
+  const rows = list.map((c) => `<div class="crow hit"${tip(esc(CARDIO_KINDS[c.kind] || 'Cardio'), [['Time', num(c.min) + ' min'], ...(usesSpeed(c.kind) ? [['Speed', (c.mph || '—') + ' mph'], ...(c.kind !== 'walk' ? [['Incline', (c.incline || 0) + '%']] : []), ['Distance', r1((num(c.mph) * num(c.min)) / 60) + ' mi']] : c.kind === 'stairs' ? [['Level', c.level || 6]] : [['Effort', c.effort || 'moderate']]), ['Extra calories', `<b>${cardioKcal(c)}</b>`], ['How', c.kcal ? 'from your watch' : 'estimate (MET ' + r1(cardioMet(c)) + ')']])}><span class="cic">${ic('health', 15)}</span><span><b>${esc(CARDIO_KINDS[c.kind] || 'Cardio')}</b><small>${esc(cardioDesc(c))}</small></span><span class="mono">~${cardioKcal(c)} kcal</span><button class="icon-btn" data-a="cDel" data-id="${c.id}" aria-label="Remove">${ic('x', 13)}</button></div>`).join('');
+  return `<div class="cardio dcard"><div class="dh"><h2 class="h3">Cardio</h2><span class="small faint">${list.length ? `${mins} min · ~${total} kcal extra` : 'extra calories on top of a resting day'}</span></div>
+    ${rows}
+    <div class="addbar cbar2"><label class="fld">Type<select class="sel" data-c="cKind">${Object.entries(CARDIO_KINDS).map(([v, l]) => `<option value="${v}" ${v === kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="fld">Minutes<input class="inp num" id="cMin" placeholder="30" style="width:80px"></label>
+      ${usesSpeed(kind) ? `<label class="fld">Speed (mph)<input class="inp num" id="cMph" placeholder="${kind === 'run' ? '6.0' : '3.0'}" style="width:90px"></label>${kind !== 'walk' ? `<label class="fld">Incline %<input class="inp num" id="cInc" placeholder="${kind === 'run' ? '0' : '12'}" style="width:80px"></label>` : ''}` : kind === 'stairs' ? `<label class="fld">Level<input class="inp num" id="cLvl" placeholder="7" style="width:70px"></label>` : `<label class="fld">Effort<select class="sel" id="cEff"><option value="easy">Easy</option><option value="moderate" selected>Moderate</option><option value="hard">Hard</option></select></label>`}
+      <label class="fld">Calories from a watch<input class="inp num" id="cKcal" placeholder="optional" style="width:120px"></label>
+      <button class="btn primary" data-a="cAdd">Add cardio</button></div></div>`;
+}
+
 function workoutsSection(k) {
   const tr = trainingOn(k);
   // Ab day: the bodyweight circuit, then the equipment ab moves (weighted Abs lifts) when there are any.
@@ -844,9 +889,10 @@ function workoutsSection(k) {
   else if (tr.type) body = liftsTable(k, dayGroup(tr.type));
   else body = `<div class="restcard"><span class="ttl">What was ${k === todayKey() ? 'today' : DOW[parseKey(k).getDay()]}?</span><span class="muted">Pick the day above: a split day shows its lifts, Ab day shows the circuit, Rest day logs a rest.</span></div>`;
   const wb = workoutBurn(k);
-  const burnLine = wb.kcal ? `<div class="burnline"><span class="mono big">~${wb.kcal}</span> kcal burned by this workout <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.easySets ? `${wb.easySets} not to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : ''].filter(Boolean).join(' + ')} · estimate</span></div>` : '';
+  const ck = cardioOn(k).reduce((a, c) => a + cardioKcal(c), 0), tot = wb.kcal + ck, fill = baseBurn() + tot;
+  const burnLine = tot ? `<div class="burnline"><span class="mono big">~${tot}</span> kcal from ${wb.kcal && ck ? 'the workout + cardio' : wb.kcal ? 'this workout' : 'cardio'} <span class="muted">· ${[wb.liftSets ? `${wb.liftSets} set${wb.liftSets === 1 ? '' : 's'} to failure` : '', wb.easySets ? `${wb.easySets} not to failure` : '', wb.abMin ? `${wb.abMin} min of circuit work` : '', ck && wb.kcal ? `${ck} from cardio` : ''].filter(Boolean).join(' + ')} · estimate</span>${DB.burns[k] !== fill ? `<button class="btn sm" data-a="burnFill" data-v="${fill}" title="Resting day ${baseBurn()} + ${tot}">Set Burned to ${fill.toLocaleString('en-US')}</button>` : '<span class="small faint">· Burned is up to date</span>'}</div>` : '';
   return `<div class="section"><div class="section-head"><h2 class="h2">Workout</h2><span class="hint">Each lift moves up by its own step (tap the chip under a target to change it). Bodyweight ab circuit: add a round when every round feels solid.</span></div>
-  ${seg}${burnLine}${body}</div>`;
+  ${seg}${burnLine}${body}${cardioCard(k)}</div>`;
 }
 
 VIEWS.health = () => {
@@ -1275,17 +1321,17 @@ const BI_DS = {
   },
   days: {
     label: 'Daily health', fields: { training: 'Day type', proteinOk: 'Protein goal', fiberOk: 'Fiber goal' },
-    measures: { deficit: ['Deficit', 'int', 'sum'], eaten: ['Calories eaten', 'int', 'avg'], burned: ['Calories burned', 'int', 'avg'], p: ['Protein (g)', 'g', 'avg'], fib: ['Fiber (g)', 'g', 'avg'], workout: ['Workout days', 'int', 'sum'], workoutKcal: ['Workout calories', 'int', 'sum'], proteinHit: ['Days protein goal hit', 'int', 'sum'], fiberHit: ['Days fiber goal hit', 'int', 'sum'] },
+    measures: { deficit: ['Deficit', 'int', 'sum'], eaten: ['Calories eaten', 'int', 'avg'], burned: ['Calories burned', 'int', 'avg'], p: ['Protein (g)', 'g', 'avg'], fib: ['Fiber (g)', 'g', 'avg'], workout: ['Workout days', 'int', 'sum'], workoutKcal: ['Workout calories', 'int', 'sum'], cardioKcal: ['Cardio calories', 'int', 'sum'], cardioMin: ['Cardio minutes', 'int', 'sum'], proteinHit: ['Days protein goal hit', 'int', 'sum'], fiberHit: ['Days fiber goal hit', 'int', 'sum'] },
     rows: (f, t) => {
       const out = [], tk = todayKey(); if (t > tk) t = tk;
-      const wdays = new Set(DB.sessions.map((s) => s.date));
+      const wdays = new Set(DB.sessions.map((s) => s.date)), cdays = new Set((DB.cardio || []).map((c) => c.date));
       for (let k = f; k <= t; k = addDays(k, 1)) {
         const ft = foodTotals(k), burn = DB.burns[k], w = wdays.has(k), tr = trainingOn(k).type;
-        if (!ft.n && burn == null && !w && !tr) continue;
+        if (!ft.n && burn == null && !w && !tr && !cdays.has(k)) continue;
         const pOk = ft.n ? ft.p >= DB.settings.proteinTarget : null, fOk = ft.n ? ft.fib >= DB.settings.fiberTarget : null;
         out.push({ date: k, training: tr === 'Abs' ? 'Ab day' : tr === 'Rest' ? 'Rest day' : tr || 'Not set', proteinOk: pOk == null ? 'No food logged' : pOk ? 'Hit' : 'Missed', fiberOk: fOk == null ? 'No food logged' : fOk ? 'Hit' : 'Missed',
           deficit: ft.n && burn != null ? burn - ft.cal : null, eaten: ft.n ? ft.cal : null, burned: burn ?? null, p: ft.n ? ft.p : null, fib: ft.n ? ft.fib : null,
-          workout: w ? 1 : 0, workoutKcal: w ? workoutBurn(k).kcal : 0, proteinHit: pOk ? 1 : 0, fiberHit: fOk ? 1 : 0 });
+          workout: w ? 1 : 0, workoutKcal: w ? workoutBurn(k).kcal : 0, cardioKcal: cardioOn(k).reduce((a, c) => a + cardioKcal(c), 0), cardioMin: cardioOn(k).reduce((a, c) => a + num(c.min), 0), proteinHit: pOk ? 1 : 0, fiberHit: fOk ? 1 : 0 });
       }
       return out;
     }
@@ -1296,6 +1342,11 @@ const BI_DS = {
     rows: (f, t) => DB.sessions.filter((s) => s.date >= f && s.date <= t).map((s) => { const ex = exOf(s.exId) || {}; const bw = isBodyweight(ex);
       return { date: s.date, exercise: ex.name || 'Removed exercise', group: ex.group || 'Other', kind: bw ? 'Bodyweight' : 'Weights', sets: s.sets.length,
         reps: s.sets.reduce((a, x) => a + num(x.r) * (x.side ? 2 : 1), 0), volume: bw ? 0 : s.sets.reduce((a, x) => a + num(x.w) * num(x.r), 0), top: bw ? null : Math.max(0, ...s.sets.map((x) => num(x.w))), done: 1 }; })
+  },
+  cardio: {
+    label: 'Cardio', fields: { kind: 'Type' },
+    measures: { kcal: ['Calories (extra)', 'int', 'sum'], min: ['Minutes', 'int', 'sum'], miles: ['Miles', 'g', 'sum'], sessions: ['Sessions', 'int', 'sum'] },
+    rows: (f, t) => (DB.cardio || []).filter((c) => c.date >= f && c.date <= t).map((c) => ({ date: c.date, kind: CARDIO_KINDS[c.kind] || 'Cardio', kcal: cardioKcal(c), min: num(c.min), miles: usesSpeed(c.kind) ? (num(c.mph) * num(c.min)) / 60 : null, sessions: 1 }))
   },
   income: {
     label: 'Income', fields: { source: 'Source', item: 'What' },
@@ -1330,7 +1381,7 @@ const BI_RANGES = { thisWeek: 'This week', lastWeek: 'Last week', last7: 'Last 7
 const BI_SIZES = [['1', 'S'], ['2', 'M'], ['3', 'L'], ['4', 'Full']];
 
 function biEarliest() {
-  const ds = [...DB.expenses.map((e) => e.date), ...(DB.income || []).map((e) => e.date), ...(DB.trades || []).map((t) => t.open), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
+  const ds = [...(DB.cardio || []).map((c) => c.date), ...DB.expenses.map((e) => e.date), ...(DB.income || []).map((e) => e.date), ...(DB.trades || []).map((t) => t.open), ...DB.foods.map((x) => x.date), ...DB.sessions.map((s) => s.date), ...Object.keys(DB.days), ...Object.keys(DB.burns)];
   return ds.length ? ds.reduce((a, b) => (a < b ? a : b)) : todayKey();
 }
 function biRange(p) {
@@ -1567,7 +1618,7 @@ VIEWS.settings = () => {
   const S = DB.settings;
   return `<div class="head"><div class="head-title"><span class="kicker">Settings</span><h1 class="h1">Preferences</h1></div></div>
   <div class="sheet" style="max-width:640px;padding:16px;display:flex;flex-direction:column;gap:14px">
-    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Deficit goal / day<input class="inp num" value="${S.deficitGoal ?? 500}" data-c="set" data-f="deficitGoal"></label><label class="fld">Workout days / week<input class="inp num" value="${S.workoutDaysGoal ?? 5}" data-c="set" data-f="workoutDaysGoal"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label><label class="fld">Trade tax %<input class="inp num" value="${S.tradeTax ?? 30}" data-c="set" data-f="tradeTax"></label></div>
+    <div class="row-flex"><label class="fld">Protein goal (g)<input class="inp num" value="${S.proteinTarget}" data-c="set" data-f="proteinTarget"></label><label class="fld">Fiber goal (g)<input class="inp num" value="${S.fiberTarget}" data-c="set" data-f="fiberTarget"></label><label class="fld">Body weight (kg)<input class="inp num" value="${S.bodyKg ?? 68}" data-c="set" data-f="bodyKg"></label><label class="fld">Deficit goal / day<input class="inp num" value="${S.deficitGoal ?? 500}" data-c="set" data-f="deficitGoal"></label><label class="fld">Workout days / week<input class="inp num" value="${S.workoutDaysGoal ?? 5}" data-c="set" data-f="workoutDaysGoal"></label><label class="fld">Currency<input class="inp" style="width:70px" value="${esc(S.currency)}" data-c="set" data-f="currency"></label><label class="fld">Trade tax %<input class="inp num" value="${S.tradeTax ?? 30}" data-c="set" data-f="tradeTax"></label><label class="fld">Height (cm)<input class="inp num" value="${S.heightCm ?? 165}" data-c="set" data-f="heightCm"></label><label class="fld">Age<input class="inp num" value="${S.age ?? 23}" data-c="set" data-f="age"></label></div>
     ${window.api ? `<label class="row-flex small"><input type="checkbox" id="loginChk" data-c="login"> Open Wellness when I log in (so alerts keep coming)</label>
     <div class="row-flex"><button class="btn" data-a="testNote">Send a test notification</button><span class="hint">If nothing shows, allow Wellness in System Settings → Notifications.</span></div>` : '<div class="hint">Running in a browser preview: notifications and open-at-login work in the Mac app.</div>'}
     ${window.api && window.api.updateInfo ? `<div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:10px">
@@ -1604,6 +1655,14 @@ const A = {
   weekNav: (el) => { const d = +el.dataset.d; ui.week = d === 0 ? weekStart(todayKey()) : addDays(ui.week, 7 * d); render(); },
   monthNav: (el) => { const d = +el.dataset.d; ui.month = d === 0 ? monthKey(todayKey()) : addMonths(ui.month, d); render(); },
   hNav: (el) => { const d = +el.dataset.d; ui.hDate = d === 0 ? todayKey() : addDays(ui.hDate, d); ui.logEx = null; ui.logSets = null; ui.ab = null; render(); },
+  cAdd: () => { const kind = ui.ckind || 'treadmill', min = num($('#cMin').value); if (!(min > 0)) { $('#cMin').focus(); return; }
+    const c = { id: uid(), date: ui.hDate, kind, min };
+    if (usesSpeed(kind)) { const mph = num($('#cMph').value); if (!(mph > 0)) { $('#cMph').focus(); return; } c.mph = mph; const ii = $('#cInc'); if (ii) c.incline = num(ii.value); }
+    else if (kind === 'stairs') c.level = num($('#cLvl').value) || 6; else c.effort = $('#cEff').value;
+    const kc = num($('#cKcal').value); if (kc > 0) c.kcal = kc;
+    DB.cardio = DB.cardio || []; DB.cardio.push(c); save(); render(); toast(`Added ${CARDIO_KINDS[kind]} · ~${cardioKcal(c)} kcal`); },
+  cDel: (el) => { DB.cardio = (DB.cardio || []).filter((c) => c.id !== el.dataset.id); save(); render(); },
+  burnFill: (el) => { DB.burns[ui.hDate] = +el.dataset.v; save(); render(); toast('Burned set to ' + (+el.dataset.v).toLocaleString('en-US')); },
   tSet: (el) => { ui.tf = { ...(ui.tf || { kind: 'stock', side: 'long' }), [el.dataset.f]: el.dataset.v }; render(); },
   tAdd: () => { const f = ui.tf || { kind: 'stock', side: 'long' }, sym = $('#tSym').value.trim().toUpperCase(), qty = num($('#tQty').value), p1 = $('#tP1').value.trim(), p2 = $('#tP2').value.trim();
     if (!sym) { $('#tSym').focus(); return; } if (!(qty > 0)) { $('#tQty').focus(); return; } if (p1 === '') { $('#tP1').focus(); return; }
@@ -1835,6 +1894,7 @@ const C = {
     img.onload = () => { const sc = Math.min(1, 2200 / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
       try { localStorage.setItem('wellness-bg', c.toDataURL('image/jpeg', 0.84)); toast('Background set'); } catch { toast('That photo is too large — try a smaller one'); } applyBg(); render(); };
     img.src = url; },
+  cKind: (el) => { ui.ckind = el.value; render(); },
   tAll: (el) => { ui.tAll = el.checked; render(); },
   biIn: (el) => { const t = ui.biDraft, f = el.dataset.f; let v = el.value; if (f === 'target' && el.tagName === 'INPUT') v = v.trim() === '' ? '' : String(num(v));
     t[f] = v;
@@ -1907,6 +1967,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.matches('#eAmt,#eItem')) A.addExp();
   if (e.key === 'Enter' && e.target.matches('#iAmt,#iItem')) A.addInc();
   if (e.key === 'Enter' && e.target.matches('.tradebar input')) A.tAdd();
+  if (e.key === 'Enter' && e.target.matches('.cbar2 input')) A.cAdd();
   if (e.key === 'Enter' && e.target.matches('#tcPrice')) A.tCloseSave({ dataset: { id: ui.tClose } });
   if (e.key === 'Enter' && e.target.matches('#fName,#fSrv,#fCal,#fP,#fC,#fFib,#fF')) A.addFood();
   if (e.key === 'Escape' && ui.open) { ui.open = null; render(); }
