@@ -71,7 +71,7 @@ export function emptyDoc() {
     categories: ['Food & dining', 'Groceries', 'Transport & gas', 'Shopping', 'Entertainment', 'Subscriptions', 'Health & fitness', 'Bills', 'Other'],
     expenses: [],
     income: [], incomeSources: ['Salary', 'Stocks'], pay: { on: false, amount: 0, freq: 'biweekly', next: '' },
-    trades: []
+    trades: [], cardio: []
   };
 }
 const withDefaults = (doc) => Object.assign(emptyDoc(), doc || {});
@@ -189,6 +189,8 @@ function describeDay(doc, k) {
   out.training = trainingOn(doc, k);
   const ex = doc.expenses.filter((e) => e.date === k);
   if (ex.length) out.expenses = ex.map((e) => ({ id: e.id, item: e.item, category: e.category, card: e.card || 'Cash / other', amount: e.amount }));
+  const cdo = (doc.cardio || []).filter((c) => c.date === k);
+  if (cdo.length) out.cardio = cdo.map((c) => ({ id: c.id, kind: CARDIO_KINDS[c.kind] || c.kind, minutes: c.min, mph: c.mph, incline: c.incline, level: c.level, effort: c.effort, kcal: cardioKcal(doc, c) }));
   const inc = allIncome(doc, k, k);
   if (inc.length) out.income = inc.map((e) => ({ id: e.id, item: e.item, source: e.source, amount: e.amount }));
   const exOrder = (s) => { const i = doc.exercises.findIndex((x) => x.id === s.exId); const e = doc.exercises[i]; return isBodyweight(e) ? 1000 + (e.pos ?? i) : i; };
@@ -241,6 +243,18 @@ function summarize(doc, from, to, tz) {
   };
 }
 
+
+
+// ---------------------------------------------------------------- cardio (same maths as the app)
+const CARDIO_KINDS = { treadmill: 'Treadmill walk', run: 'Run', walk: 'Outdoor walk', stairs: 'StairMaster', row: 'Rowing', bike: 'Bike', other: 'Other' };
+const CARDIO_EFFORT = { row: { easy: 4.8, moderate: 7, hard: 8.5 }, bike: { easy: 5.5, moderate: 7, hard: 10 }, other: { easy: 4, moderate: 6, hard: 8 } };
+const usesSpeed = (k) => k === 'treadmill' || k === 'run' || k === 'walk';
+function cardioMet(c) {
+  if (usesSpeed(c.kind)) { const v = num(c.mph) * 26.8224, g = num(c.incline) / 100, running = c.kind === 'run' || num(c.mph) >= 4.5; return (running ? 0.2 * v + 0.9 * v * g + 3.5 : 0.1 * v + 1.8 * v * g + 3.5) / 3.5; }
+  if (c.kind === 'stairs') return 4 + 0.65 * (num(c.level) || 6);
+  return (CARDIO_EFFORT[c.kind] || CARDIO_EFFORT.other)[c.effort || 'moderate'];
+}
+const cardioKcal = (doc, c) => (num(c.kcal) > 0 ? Math.round(num(c.kcal)) : Math.max(0, Math.round((cardioMet(c) - 1) * (num(doc.settings && doc.settings.bodyKg) || 68) * (num(c.min) / 60))));
 
 // ---------------------------------------------------------------- trades (stocks + options)
 // P/L = (sell − buy) × qty × (100 for options) − fees, counted as Stocks income on the close date.
@@ -407,6 +421,11 @@ const TOOLS = [
     annotations: { readOnlyHint: true }
   },
   {
+    name: 'log_cardio',
+    description: 'Log cardio for a day. Calories are estimated as the extra burn on top of a resting day: treadmill / outdoor walk / run from speed (mph) and incline (%), StairMaster from level, rowing / bike / other from effort. Pass kcal to use a number from a watch instead. Add the result to that day\'s calories burned (set_calories_burned) as well.',
+    inputSchema: { type: 'object', properties: { date: dateProp, kind: { type: 'string', enum: Object.keys(CARDIO_KINDS) }, minutes: { type: 'number' }, mph: { type: 'number' }, incline: { type: 'number', description: 'percent' }, level: { type: 'number' }, effort: { type: 'string', enum: ['easy', 'moderate', 'hard'] }, kcal: { type: 'number', description: 'Optional, from a watch' } }, required: ['kind', 'minutes'] }
+  },
+  {
     name: 'set_training_day',
     description: 'Say what kind of training day a date is: one of the 5 workout days (Shoulders & Chest, Arms, Back, Legs, Abs) or Rest. Shown in the Health view’s day picker. day=null clears it.',
     inputSchema: { type: 'object', properties: { date: dateProp, day: { type: ['string', 'null'], enum: [...DAY_TYPES, null] } }, required: ['day'] }
@@ -414,7 +433,7 @@ const TOOLS = [
   {
     name: 'remove_entries',
     description: 'Delete food, expense, income or trade entries by id (ids come from get_day, list_expenses, list_income or list_trades).',
-    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } }, income_ids: { type: 'array', items: { type: 'string' } }, trade_ids: { type: 'array', items: { type: 'string' } } } },
+    inputSchema: { type: 'object', properties: { food_ids: { type: 'array', items: { type: 'string' } }, expense_ids: { type: 'array', items: { type: 'string' } }, income_ids: { type: 'array', items: { type: 'string' } }, trade_ids: { type: 'array', items: { type: 'string' } }, cardio_ids: { type: 'array', items: { type: 'string' } } } },
     annotations: { destructiveHint: true }
   }
 ];
@@ -477,6 +496,18 @@ function runTool(name, args, doc, tz) {
       }
       const t = foodTotals(doc, k);
       return { write: true, result: { added: added.map((x) => `${x.name} (${x.qty}): ${x.cal} cal, ${x.p} g protein, ${x.fib} g fiber${x.note ? ' — ' + x.note : ''}`), dayTotals: t, proteinLeft: Math.max(0, r1(S.proteinTarget - t.protein)), fiberLeft: Math.max(0, r1(S.fiberTarget - t.fiber)) } };
+    }
+    case 'log_cardio': {
+      doc.cardio = doc.cardio || [];
+      if (!CARDIO_KINDS[a.kind]) throw new Error('kind must be one of ' + Object.keys(CARDIO_KINDS).join(', '));
+      if (!(num(a.minutes) > 0)) throw new Error('minutes is required.');
+      if (usesSpeed(a.kind) && !(num(a.mph) > 0) && !(num(a.kcal) > 0)) throw new Error('Give the speed in mph (or kcal from a watch).');
+      const c = { id: uid(), date: resolveDate(a.date, tz), kind: a.kind, min: num(a.minutes) };
+      if (usesSpeed(a.kind)) { c.mph = num(a.mph); if (a.kind !== 'walk') c.incline = num(a.incline); } else if (a.kind === 'stairs') c.level = num(a.level) || 6; else c.effort = a.effort || 'moderate';
+      if (num(a.kcal) > 0) c.kcal = num(a.kcal);
+      doc.cardio.push(c);
+      const day = (doc.cardio || []).filter((x) => x.date === c.date).reduce((x, y) => x + cardioKcal(doc, y), 0);
+      return { write: true, result: { added: { id: c.id, date: c.date, kind: CARDIO_KINDS[c.kind], minutes: c.min, kcal: cardioKcal(doc, c) }, cardioKcalThatDay: day } };
     }
     case 'log_trade': {
       doc.trades = doc.trades || [];
@@ -656,9 +687,10 @@ function runTool(name, args, doc, tz) {
       doc.foods = doc.foods.filter((x) => !fi.has(x.id));
       doc.expenses = doc.expenses.filter((x) => !ei.has(x.id));
       doc.income = (doc.income || []).filter((x) => !ii.has(x.id));
+      const ci = new Set(a.cardio_ids || []), nc = (doc.cardio || []).length; doc.cardio = (doc.cardio || []).filter((x) => !ci.has(x.id));
       const ti = new Set(a.trade_ids || []), nt = (doc.trades || []).length;
       doc.trades = (doc.trades || []).filter((x) => !ti.has(x.id));
-      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length, removedIncome: ni - doc.income.length, removedTrades: nt - doc.trades.length } };
+      return { write: true, result: { removedFoods: nf - doc.foods.length, removedExpenses: ne - doc.expenses.length, removedIncome: ni - doc.income.length, removedTrades: nt - doc.trades.length, removedCardio: nc - doc.cardio.length } };
     }
     default: throw new Error(`Unknown tool ${name}`);
   }

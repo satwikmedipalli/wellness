@@ -593,3 +593,13 @@ html,body{background:#cfd6de}
 .tradebar .seg{align-self:flex-end;margin-bottom:1px}
 .tag-s{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:999px;background:var(--soft2);color:var(--ink2);margin-left:4px}
 .stats .stat:first-child .neg{color:#fca5a5!important}
+/* cardio */
+.cardio{margin-top:14px}
+.crow{display:grid;grid-template-columns:32px minmax(0,1fr) auto 30px;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:10px}
+.crow:hover{background:var(--g-inner)}
+.crow b{display:block;font-size:13.5px}.crow small{display:block;font-size:12px;color:var(--ink2);margin-top:1px}
+.cic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--g-inner)}
+.cbar2{border-radius:14px;margin-top:8px}
+.burnline .btn{margin-left:auto}
+.burnline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.burnline .big{display:inline;border:0;padding:0;grid-template-columns:none}
